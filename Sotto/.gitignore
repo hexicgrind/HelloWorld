@@ -1,0 +1,15 @@
+# Build output
+build/
+app/build/
+.gradle/
+local.properties
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# Never commit real credentials. The bundled sotto-sideload.jks is a throwaway
+# key for sideloading only and is intentionally tracked.
+*.keystore
+google-services.json

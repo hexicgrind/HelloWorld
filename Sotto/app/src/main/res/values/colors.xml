@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Sotto brand palette.
+
+  Ink is the resting state (a camera viewfinder lives in the dark). Violet is the
+  brand/primary. Teal is reserved exclusively for "a person has been recognised" so
+  that one colour always means one thing. Amber warns, coral fails.
+-->
+<resources>
+    <color name="sotto_ink">#FF0A0E1A</color>
+    <color name="sotto_ink_elevated">#FF141A2B</color>
+    <color name="sotto_ink_surface">#FF1C2437</color>
+
+    <color name="sotto_violet">#FF7C6CFF</color>
+    <color name="sotto_violet_bright">#FF9C90FF</color>
+    <color name="sotto_violet_deep">#FF4A3BC7</color>
+
+    <color name="sotto_teal">#FF38E1C6</color>
+    <color name="sotto_teal_deep">#FF11897A</color>
+
+    <color name="sotto_amber">#FFFFB86B</color>
+    <color name="sotto_coral">#FFFF6B7A</color>
+
+    <color name="sotto_cloud">#FFF6F7FB</color>
+    <color name="sotto_slate">#FF8892AB</color>
+
+    <color name="ic_launcher_background">#FF0A0E1A</color>
+</resources>

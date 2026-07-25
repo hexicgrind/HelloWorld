@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Themed-icon variant: same mark, single colour, slightly heavier so it stays
+     legible when the system tints it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108"
+    android:tint="#FFFFFFFF">
+    <path
+        android:pathData="M 43.5 40.5 A 17 17 0 0 1 43.5 67.5"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:strokeColor="#FFFFFFFF"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M 54 33 A 28.5 28.5 0 0 1 54 75"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:strokeColor="#FFFFFFFF"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M 65 26 A 40 40 0 0 1 65 82"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:strokeColor="#FFFFFFFF"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M 34 54 m -9 0 a 9 9 0 1 0 18 0 a 9 9 0 1 0 -18 0"
+        android:fillColor="#FFFFFFFF" />
+</vector>

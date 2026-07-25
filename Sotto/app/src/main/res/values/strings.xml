@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Sotto</string>
+    <string name="app_tagline">Your networking wingman, in a whisper.</string>
+
+    <string name="notification_channel_session">Live session</string>
+    <string name="notification_channel_session_desc">Shown while Sotto is listening so you always know the microphone is on.</string>
+    <string name="notification_session_title">Sotto is listening</string>
+    <string name="notification_session_text">Tap to return to your live session.</string>
+    <string name="notification_session_stop">Stop</string>
+</resources>
