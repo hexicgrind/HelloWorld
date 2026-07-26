@@ -294,7 +294,7 @@ class PromptBuilderTest {
 
     @Test
     fun `an overlong suggestion is truncated`() {
-        val long = "Ask them ".repeat(80)
+        val long = "Ask them ".repeat(80).trim() + "."
         val decision = PromptBuilder.parseDecision(long)
         assertThat(decision.text!!.length).isAtMost(PromptBuilder.MAX_SUGGESTION_CHARS + 1)
         assertThat(decision.text).endsWith("…")
@@ -452,8 +452,42 @@ class PromptBuilderTest {
     }
 
     @Test
-    fun `a complete sentence without a full stop is fine`() {
+    fun `a sentence with no terminal punctuation is treated as truncated`() {
+        // This assertion used to be the opposite way round, on the reasonable-sounding
+        // theory that a missing full stop is just sloppy formatting. In practice it is
+        // the only reliable marker of a cut-off generation: "Ask what kind" and "What
+        // game genre" are both well-formed English prefixes that no grammar check would
+        // reject, and both were whispered into a user's ear. The system instruction now
+        // requires the punctuation, so demanding it costs nothing.
         assertThat(PromptBuilder.parseDecision("Ask how the Berlin launch went").shouldSpeak)
+            .isFalse()
+        assertThat(PromptBuilder.parseDecision("Ask how the Berlin launch went.").shouldSpeak)
+            .isTrue()
+    }
+
+    @Test
+    fun `the fragments a user actually heard are rejected`() {
+        listOf(
+            "FOLLOW_UP: Ask what kind",
+            "Ask what kind",
+            "What game genre",
+            "TOPIC_SHIFT: What game genre",
+            "Ask her about the",
+            "CONNECTION: You both",
+        ).forEach { fragment ->
+            assertThat(PromptBuilder.parseDecision(fragment).shouldSpeak).isFalse()
+        }
+    }
+
+    @Test
+    fun `a question mark counts as a finished thought`() {
+        assertThat(PromptBuilder.parseDecision("FOLLOW_UP: What drew her to robotics?").text)
+            .isEqualTo("What drew her to robotics?")
+    }
+
+    @Test
+    fun `an exclamation counts too`() {
+        assertThat(PromptBuilder.parseDecision("Congratulate him on the funding round!").shouldSpeak)
             .isTrue()
     }
 
@@ -465,7 +499,7 @@ class PromptBuilderTest {
 
     @Test
     fun `truncation lands on a word boundary`() {
-        val long = "Ask them about the migration " .repeat(20)
+        val long = "Ask them about the migration ".repeat(20).trim() + "."
         val text = PromptBuilder.parseDecision(long).text!!
         assertThat(text).endsWith("…")
         assertThat(text.length).isAtMost(PromptBuilder.MAX_SUGGESTION_CHARS + 1)
@@ -480,12 +514,15 @@ class PromptBuilderTest {
         assertThat(PromptBuilder.isCompleteThought("Ask about the")).isFalse()
         assertThat(PromptBuilder.isCompleteThought("Ask about the Berlin launch, and")).isFalse()
         assertThat(PromptBuilder.isCompleteThought("Two words")).isFalse()
+        assertThat(PromptBuilder.isCompleteThought("Ask what kind")).isFalse()
+        assertThat(PromptBuilder.isCompleteThought("Ask about the launch (the big one.")).isFalse()
     }
 
     @Test
     fun `the system instruction shows the model what a valid reply looks like`() {
         val text = PromptBuilder.systemInstruction(SottoSettings(), hasDatabase = true)
         assertThat(text).contains("FOLLOW_UP: Ask what changed after the Berlin launch.")
-        assertThat(text).contains("Finish the sentence")
+        assertThat(text).contains("full stop or a question mark")
+        assertThat(text).contains("Finish the thought")
     }
 }

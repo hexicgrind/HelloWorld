@@ -13,9 +13,9 @@ and most of that is waiting for Gemini to read your attendee list.
 
 | File | Use it when |
 |---|---|
-| `Sotto-1.1.0-arm64.apk` | **Start here.** Every Android phone made in the last several years. 53 MB. |
-| `Sotto-1.1.0-universal.apk` | If the arm64 one refuses to install. Works everywhere. 64 MB. |
-| `Sotto-1.1.0-arm32.apk` | Only for a genuinely old 32-bit phone. |
+| `Sotto-1.1.1-arm64.apk` | **Start here.** Every Android phone made in the last several years. 53 MB. |
+| `Sotto-1.1.1-universal.apk` | If the arm64 one refuses to install. Works everywhere. 64 MB. |
+| `Sotto-1.1.1-arm32.apk` | Only for a genuinely old 32-bit phone. |
 
 **To install:**
 
@@ -97,11 +97,12 @@ Sotto can only recognise someone whose face you've enrolled. A roster gives you 
 it does not give you faces.
 
 For each person: **People → tap their name → Enrol face**, then capture three times,
-changing the angle slightly between each. Or tap the photo icon to use a picture you
-already have.
+changing the angle slightly between each. Or tap the photo icon and pick several
+pictures you already have — the picker takes up to six at once.
 
-The three captures get averaged into one 128-number fingerprint, stored on your phone.
-The photos never leave the device.
+The captures get averaged into one 128-number fingerprint, stored on your phone. Three
+angles recognises far more reliably than one, but **one good photo is enough to save**
+if that's all you have. The photos never leave the device.
 
 ---
 
@@ -153,7 +154,7 @@ often it may speak* to 5 seconds and *How long a pause must be* to 0.5 seconds.
 
 | What you see | What's going on |
 |---|---|
-| "Sotto can't load its on-device model" | Install 1.1.0 or later. Older builds had two separate faults here — 16 KB page alignment, and a code-optimiser bug that broke face detection outright. |
+| "Sotto can't load its on-device model" | Install 1.1.1 or later. Older builds had two separate faults here — 16 KB page alignment, and a code-optimiser bug that broke face detection outright. |
 | Sotto never speaks | Check the **Assistant** dot at the top of the live screen. Amber means the Gemini key was rejected — test it in Settings. |
 | Nobody is recognised | Only enrolled people can be. Check **People** for the "Recognisable" tag. |
 | Wrong person recognised | **Settings → Face recognition →** raise *How sure Sotto must be*, or re-enrol both people in better light. |
@@ -162,6 +163,7 @@ often it may speak* to 5 seconds and *How long a pause must be* to 0.5 seconds.
 | The voice sounds robotic | Same screen — install *Google Speech Services* voices, then pick a "high quality" one in Sotto's **Settings → Voice**. |
 | The transcript stays empty | Gemini Live hasn't connected. Check the **Assistant** dot at the top of the live screen. |
 | It talks too much | **Settings → How Sotto behaves →** raise the interval or lengthen the required pause. |
+| It chimes every time someone glances away | **Settings → Face recognition →** raise *Don't re-announce the same person for*. Default is 4 minutes. |
 
 ### If you do have service-account credentials
 

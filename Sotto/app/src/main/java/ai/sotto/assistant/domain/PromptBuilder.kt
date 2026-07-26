@@ -74,7 +74,9 @@ object PromptBuilder {
         // The parser rejects fragments outright, so a half-sentence costs the user the
         // whole turn. Say so, rather than relying on the model to infer it.
         appendLine("Hard rules:")
-        appendLine("- Finish the sentence. A cut-off half-sentence is discarded entirely.")
+        appendLine("- End with a full stop or a question mark. A reply without one is")
+        appendLine("  treated as truncated and discarded entirely, so the user hears nothing.")
+        appendLine("- Finish the thought. Never stop part-way through a sentence.")
         appendLine("- No preamble, no heading, no reasoning, no quotes, no markdown.")
         appendLine("- Never output more than that one line.")
 
@@ -284,6 +286,14 @@ object PromptBuilder {
     internal fun isCompleteThought(text: String): Boolean {
         val words = text.split(WHITESPACE).filter { it.isNotBlank() }
         if (words.size < MIN_SUGGESTION_WORDS) return false
+
+        // The one reliable signal. A truncated generation stops wherever the tokens ran
+        // out; it does not stop on a full stop. Requiring terminal punctuation is what
+        // catches "Ask what kind" and "What game genre" — both of which are perfectly
+        // well-formed English prefixes, so no amount of grammar-sniffing would.
+        // The system instruction demands the punctuation, so this costs nothing real.
+        if (text.last() !in TERMINATORS) return false
+
         // Ends mid-clause: a conjunction or article as the final word is a giveaway.
         if (DANGLING_REGEX.containsMatchIn(text)) return false
         // An unbalanced opening bracket means the closing half never arrived.
@@ -347,6 +357,9 @@ object PromptBuilder {
     const val MIN_SUGGESTION_WORDS = 3
 
     private val WHITESPACE = Regex("\\s+")
+
+    /** What a finished sentence ends with. */
+    private val TERMINATORS = charArrayOf('.', '?', '!', '…')
 
     private val KIND_REGEX =
         Regex("^\\s*[-*•]?\\s*\\**\\[?(FOLLOW[_ -]?UP|CONNECTION|TOPIC[_ -]?SHIFT)]?\\**\\s*[:\\-–]\\s*",

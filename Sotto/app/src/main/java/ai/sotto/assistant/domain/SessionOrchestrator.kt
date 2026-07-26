@@ -114,6 +114,11 @@ class SessionOrchestrator(
     /** When each person was last announced, for the re-recognition cooldown. */
     private val announcedAtMs = mutableMapOf<String, Long>()
 
+    /** Model turns thrown away as unusable this session — visible in Diagnostics. */
+    @Volatile
+    var discardedTurns: Int = 0
+        private set
+
     @Volatile
     private var liveReady = false
 
@@ -212,6 +217,7 @@ class SessionOrchestrator(
         synchronized(utteranceBuffer) { utteranceBuffer.reset() }
         currentTargetId = null
         announcedAtMs.clear()
+        discardedTurns = 0
         liveReady = false
         reconnectAttempts = 0
         speaking = false
@@ -451,6 +457,9 @@ class SessionOrchestrator(
             if (e is AppError.MissingApiKey || e is AppError.Unauthorized) showBannerOnce(e)
         } catch (t: Throwable) {
             _health.value = _health.value.copy(assistantOk = false)
+        } finally {
+            // Reopen the gate however this ended, or the loop stalls until the timeout.
+            pauseDetector.onDecisionSettled()
         }
     }
 
@@ -468,6 +477,7 @@ class SessionOrchestrator(
                     }
 
                     is GeminiLiveClient.Event.Turn -> {
+                        pauseDetector.onDecisionSettled()
                         val decision = PromptBuilder.parseDecision(event.text)
                         if (decision.shouldSpeak) {
                             emitSuggestion(
@@ -476,8 +486,15 @@ class SessionOrchestrator(
                                 attendeeId = currentTargetId,
                                 usedWebSearch = event.usedWebSearch,
                             )
-                        } else {
+                        } else if (event.text.trim().equals(PromptBuilder.PASS_TOKEN, true)) {
                             SLog.d(TAG) { "Gemini chose to stay quiet" }
+                        } else {
+                            // Silence from a rejected fragment looks identical to silence
+                            // from a deliberate PASS. Log the difference, so "it never
+                            // says anything" can be told apart from "it says nothing
+                            // useful" without guessing.
+                            discardedTurns++
+                            SLog.w(TAG, "Discarded an unusable model turn: ${event.text.take(120)}")
                         }
                     }
 
@@ -490,6 +507,7 @@ class SessionOrchestrator(
 
                     is GeminiLiveClient.Event.Failed -> {
                         liveReady = false
+                        pauseDetector.onDecisionSettled()
                         _health.value = _health.value.copy(
                             assistantOk = false,
                             degradedReason = event.error.userMessage,
@@ -504,6 +522,7 @@ class SessionOrchestrator(
 
                     is GeminiLiveClient.Event.Closed -> {
                         liveReady = false
+                        pauseDetector.onDecisionSettled()
                         if (_state.value == State.RUNNING) scheduleReconnect()
                     }
                 }

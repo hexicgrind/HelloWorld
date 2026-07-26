@@ -25,10 +25,13 @@ class PauseDetector(
     var maxIntervalMs: Long = DEFAULT_MAX_INTERVAL_MS,
     /** Enforced quiet time after we speak, so we never stack whispers. */
     var cooldownAfterSpeakingMs: Long = DEFAULT_COOLDOWN_MS,
+    /** How long to wait for an answer before assuming one is never coming. */
+    var responseTimeoutMs: Long = DEFAULT_RESPONSE_TIMEOUT_MS,
 ) {
     private var lastSpeechEndedAtMs = 0L
     private var lastRequestAtMs = 0L
     private var lastSpokeAtMs = 0L
+    private var awaitingSinceMs = 0L
     private var speechSinceLastRequest = false
     private var currentlySpeaking = false
 
@@ -46,6 +49,17 @@ class PauseDetector(
         COOLING_DOWN,
         /** Nothing new has been said since the last time we asked. */
         NOTHING_NEW,
+
+        /**
+         * A question is already out and the answer hasn't come back.
+         *
+         * This one is load-bearing. Sending a second request over the live socket
+         * interrupts the generation already in progress, and the half-written sentence
+         * gets delivered as though it were finished — which is how a user ended up
+         * hearing whispers like "ask what kind". Asking again is not free; it destroys
+         * the answer to the previous question.
+         */
+        AWAITING_REPLY,
     }
 
     /** Call on every VAD frame. */
@@ -70,8 +84,21 @@ class PauseDetector(
         lastSpokeAtMs = nowMs
     }
 
+    /**
+     * Call when a decision comes back — whether it was a whisper or a PASS, and whether
+     * it succeeded or failed. Until this happens the gate stays shut.
+     */
+    fun onDecisionSettled() {
+        awaitingSinceMs = 0L
+    }
+
     /** Evaluates the current moment without changing any state. */
     fun evaluate(nowMs: Long): Verdict {
+        // Before anything else: never talk over our own outstanding question.
+        if (awaitingSinceMs > 0L && nowMs - awaitingSinceMs < responseTimeoutMs) {
+            return Verdict.AWAITING_REPLY
+        }
+
         if (currentlySpeaking) return Verdict.SPEAKING
 
         if (lastSpokeAtMs > 0 && nowMs - lastSpokeAtMs < cooldownAfterSpeakingMs) {
@@ -102,6 +129,7 @@ class PauseDetector(
         val verdict = evaluate(nowMs)
         if (verdict != Verdict.ASK) return false
         lastRequestAtMs = nowMs
+        awaitingSinceMs = nowMs
         speechSinceLastRequest = false
         return true
     }
@@ -114,6 +142,7 @@ class PauseDetector(
         lastSpeechEndedAtMs = 0L
         lastRequestAtMs = 0L
         lastSpokeAtMs = 0L
+        awaitingSinceMs = 0L
         speechSinceLastRequest = false
         currentlySpeaking = false
     }
@@ -123,5 +152,11 @@ class PauseDetector(
         const val DEFAULT_MIN_INTERVAL_MS = 7_000L
         const val DEFAULT_MAX_INTERVAL_MS = 25_000L
         const val DEFAULT_COOLDOWN_MS = 6_000L
+
+        /**
+         * Generous, because a grounded answer can genuinely take this long. Cutting it
+         * short is exactly the failure this timeout exists to avoid.
+         */
+        const val DEFAULT_RESPONSE_TIMEOUT_MS = 30_000L
     }
 }

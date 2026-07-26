@@ -64,6 +64,7 @@ class PauseDetectorTest {
     fun `a second request is rate limited within the interval`() {
         speakUntil(1_000L)
         assertThat(detector.shouldRequestSuggestion(3_000L)).isTrue()
+        detector.onDecisionSettled()
 
         speakUntil(4_000L, startMs = 3_500L)
         // Only 2 seconds since the last ask, well inside the 7-second default.
@@ -74,6 +75,7 @@ class PauseDetectorTest {
     fun `a request is allowed again after the interval elapses`() {
         speakUntil(1_000L)
         assertThat(detector.shouldRequestSuggestion(3_000L)).isTrue()
+        detector.onDecisionSettled()
 
         speakUntil(9_000L, startMs = 8_000L)
         assertThat(detector.shouldRequestSuggestion(11_000L)).isTrue()
@@ -84,6 +86,7 @@ class PauseDetectorTest {
         detector.minIntervalMs = 5_000L
         speakUntil(1_000L)
         assertThat(detector.shouldRequestSuggestion(3_000L)).isTrue()
+        detector.onDecisionSettled()
 
         speakUntil(6_500L, startMs = 6_000L)
         assertThat(detector.evaluate(7_800L)).isEqualTo(PauseDetector.Verdict.RATE_LIMITED)
@@ -97,6 +100,7 @@ class PauseDetectorTest {
     fun `no request when nothing has been said since the last one`() {
         speakUntil(1_000L)
         assertThat(detector.shouldRequestSuggestion(3_000L)).isTrue()
+        detector.onDecisionSettled()
 
         // Long silence, nobody spoke again. Not worth asking for a while.
         assertThat(detector.evaluate(3_000L + PauseDetector.DEFAULT_MIN_INTERVAL_MS + 500))
@@ -107,6 +111,7 @@ class PauseDetectorTest {
     fun `after a very long silence a request is allowed anyway`() {
         speakUntil(1_000L)
         assertThat(detector.shouldRequestSuggestion(3_000L)).isTrue()
+        detector.onDecisionSettled()
 
         // The escape hatch: a stalled conversation is exactly when a nudge helps.
         assertThat(detector.evaluate(3_000L + PauseDetector.DEFAULT_MAX_INTERVAL_MS))
@@ -117,6 +122,7 @@ class PauseDetectorTest {
     fun `a transcript line counts as something new`() {
         speakUntil(1_000L)
         assertThat(detector.shouldRequestSuggestion(3_000L)).isTrue()
+        detector.onDecisionSettled()
 
         detector.onTranscript(nowMs = 4_000L)
         assertThat(detector.evaluate(4_000L + PauseDetector.DEFAULT_MIN_INTERVAL_MS + 100))
@@ -129,6 +135,7 @@ class PauseDetectorTest {
     fun `no request right after Sotto speaks`() {
         speakUntil(1_000L)
         detector.shouldRequestSuggestion(3_000L)
+        detector.onDecisionSettled()
         detector.onSuggestionSpoken(nowMs = 3_500L)
 
         speakUntil(5_000L, startMs = 4_500L)
@@ -139,6 +146,7 @@ class PauseDetectorTest {
     fun `requests resume after the cooldown expires`() {
         speakUntil(1_000L)
         detector.shouldRequestSuggestion(3_000L)
+        detector.onDecisionSettled()
         detector.onSuggestionSpoken(nowMs = 3_500L)
 
         val afterCooldown = 3_500L + PauseDetector.DEFAULT_COOLDOWN_MS
@@ -151,6 +159,7 @@ class PauseDetectorTest {
         detector.cooldownAfterSpeakingMs = 30_000L
         speakUntil(1_000L)
         detector.shouldRequestSuggestion(3_000L)
+        detector.onDecisionSettled()
         detector.onSuggestionSpoken(nowMs = 3_000L)
 
         assertThat(detector.evaluate(3_000L + PauseDetector.DEFAULT_MAX_INTERVAL_MS))
@@ -192,6 +201,7 @@ class PauseDetectorTest {
     fun `shouldRequestSuggestion consumes the opportunity`() {
         speakUntil(1_000L)
         assertThat(detector.shouldRequestSuggestion(3_000L)).isTrue()
+        detector.onDecisionSettled()
         // Calling again immediately must not fire a second request.
         assertThat(detector.shouldRequestSuggestion(3_001L)).isFalse()
     }
@@ -202,12 +212,14 @@ class PauseDetectorTest {
         assertThat(detector.evaluate(3_000L)).isEqualTo(PauseDetector.Verdict.ASK)
         assertThat(detector.evaluate(3_000L)).isEqualTo(PauseDetector.Verdict.ASK)
         assertThat(detector.shouldRequestSuggestion(3_000L)).isTrue()
+        detector.onDecisionSettled()
     }
 
     @Test
     fun `reset clears everything`() {
         speakUntil(1_000L)
         detector.shouldRequestSuggestion(3_000L)
+        detector.onDecisionSettled()
         detector.onSuggestionSpoken(3_100L)
 
         detector.reset()
@@ -263,5 +275,85 @@ class PauseDetectorTest {
             if (detector.shouldRequestSuggestion(now)) asks++
         }
         assertThat(asks).isEqualTo(0)
+    }
+
+    // ---- One question at a time ------------------------------------------------------
+    //
+    // A user heard whispers like "ask what kind" and "what game genre" — the opening
+    // words of a sentence, delivered as though finished. Sending a second request over
+    // the live socket interrupts the generation already running, and the fragment
+    // written so far gets delivered. Nothing here stopped that: the cadence gate only
+    // knew when we last *asked*, never whether an answer had come back, so a reply that
+    // took longer than the interval was reliably destroyed by the next question.
+
+    @Test
+    fun `a second question is not asked while the first is unanswered`() {
+        speakUntil(1_000L)
+        assertThat(detector.shouldRequestSuggestion(3_000L)).isTrue()
+
+        speakUntil(12_000L, startMs = 11_000L)
+        // Past the interval, and something new was said — but the answer is still coming.
+        assertThat(detector.evaluate(14_000L)).isEqualTo(PauseDetector.Verdict.AWAITING_REPLY)
+        assertThat(detector.shouldRequestSuggestion(14_000L)).isFalse()
+    }
+
+    @Test
+    fun `the long-gap escape hatch cannot interrupt an unanswered question either`() {
+        speakUntil(1_000L)
+        assertThat(detector.shouldRequestSuggestion(3_000L)).isTrue()
+
+        assertThat(detector.evaluate(3_000L + PauseDetector.DEFAULT_MAX_INTERVAL_MS))
+            .isEqualTo(PauseDetector.Verdict.AWAITING_REPLY)
+    }
+
+    @Test
+    fun `asking resumes once the answer arrives`() {
+        speakUntil(1_000L)
+        assertThat(detector.shouldRequestSuggestion(3_000L)).isTrue()
+
+        detector.onDecisionSettled()
+
+        speakUntil(11_000L, startMs = 10_000L)
+        assertThat(detector.shouldRequestSuggestion(13_000L)).isTrue()
+    }
+
+    @Test
+    fun `a PASS reopens the gate just as a whisper does`() {
+        // A decision to stay quiet is still an answer; the gate must not stay shut.
+        speakUntil(1_000L)
+        detector.shouldRequestSuggestion(3_000L)
+        detector.onDecisionSettled()
+
+        speakUntil(11_000L, startMs = 10_000L)
+        assertThat(detector.evaluate(13_000L)).isEqualTo(PauseDetector.Verdict.ASK)
+    }
+
+    @Test
+    fun `an answer that never arrives eventually stops blocking`() {
+        // A dropped socket must not wedge the session in silence for ever.
+        speakUntil(1_000L)
+        assertThat(detector.shouldRequestSuggestion(3_000L)).isTrue()
+
+        val afterTimeout = 3_000L + PauseDetector.DEFAULT_RESPONSE_TIMEOUT_MS
+        assertThat(detector.evaluate(afterTimeout - 1)).isEqualTo(PauseDetector.Verdict.AWAITING_REPLY)
+        assertThat(detector.evaluate(afterTimeout)).isEqualTo(PauseDetector.Verdict.ASK)
+    }
+
+    @Test
+    fun `the response timeout is long enough for a grounded answer`() {
+        // Short enough and the timeout re-creates the very bug it guards against.
+        assertThat(PauseDetector.DEFAULT_RESPONSE_TIMEOUT_MS)
+            .isGreaterThan(PauseDetector.DEFAULT_MAX_INTERVAL_MS)
+    }
+
+    @Test
+    fun `resetting clears an outstanding question`() {
+        speakUntil(1_000L)
+        detector.shouldRequestSuggestion(3_000L)
+
+        detector.reset()
+
+        speakUntil(5_000L, startMs = 4_000L)
+        assertThat(detector.evaluate(7_000L)).isEqualTo(PauseDetector.Verdict.ASK)
     }
 }
