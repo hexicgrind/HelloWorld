@@ -85,9 +85,13 @@ fun EnrollScreen(
     LaunchedEffect(attendeeId) { viewModel.beginEnrolment(attendeeId) }
     DisposableEffect(Unit) { onDispose { viewModel.endEnrolment() } }
 
+    // Multiple, not single. The single-item picker meant someone working from a photo
+    // library had to leave and re-enter the picker for every sample, and on a
+    // memory-tight phone the round trip could recreate the activity and lose what was
+    // already captured — so in practice they could never get past one photo.
     val photoPicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickVisualMedia()
-    ) { uri -> uri?.let(viewModel::captureFromUri) }
+        ActivityResultContracts.PickMultipleVisualMedia(RosterViewModel.MAX_SAMPLES)
+    ) { uris -> viewModel.captureFromUris(uris) }
 
     LaunchedEffect(enrol.saved) {
         if (enrol.saved) {
@@ -126,9 +130,10 @@ fun EnrollScreen(
                 .padding(horizontal = 20.dp),
         ) {
             Text(
-                "Get their face filling most of the frame, then capture " +
-                    "${RosterViewModel.MIN_SAMPLES} times — change the angle slightly between " +
-                    "each one. That's what makes recognition reliable.",
+                "Get their face filling most of the frame and capture " +
+                    "${RosterViewModel.MIN_SAMPLES} times, changing the angle slightly between " +
+                    "each one — that's what makes recognition reliable. No camera access to " +
+                    "them? Tap the photo icon and pick several pictures at once.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = SottoColors.Slate,
             )
@@ -227,7 +232,14 @@ fun EnrollScreen(
             }
 
             PrimaryButton(
-                text = if (enrol.saved) "Saved" else "Save face",
+                text = when {
+                    enrol.saved -> "Saved"
+                    enrol.samples.isEmpty() -> "Save face"
+                    enrol.isReliable -> "Save face"
+                    // Say plainly that saving now is allowed but weaker, rather than
+                    // greying the button out and leaving the user stuck.
+                    else -> "Save face (${enrol.samples.size} of ${RosterViewModel.MIN_SAMPLES})"
+                },
                 onClick = viewModel::saveEnrolment,
                 enabled = enrol.canSave && !enrol.saved,
                 modifier = Modifier

@@ -78,7 +78,21 @@ class RosterViewModel(private val container: AppContainer) : ViewModel() {
             override fun hashCode() = System.identityHashCode(this)
         }
 
-        val canSave: Boolean get() = samples.size >= MIN_SAMPLES && !capturing
+        /**
+         * One good sample is enough to enrol.
+         *
+         * This used to demand [MIN_SAMPLES]. That turned "I only have one photo of this
+         * person" — the normal case when you're working from a roster rather than
+         * standing in front of someone — into a hard wall that blocked face matching
+         * entirely. Three is still what we ask for, because averaging cancels out the
+         * lighting and angle of any single frame, but asking is not the same as
+         * refusing.
+         */
+        val canSave: Boolean get() = samples.isNotEmpty() && !capturing
+
+        /** True once averaging is actually doing its job. */
+        val isReliable: Boolean get() = samples.size >= MIN_SAMPLES
+
         val averageQuality: Float
             get() = if (samples.isEmpty()) 0f else samples.map { it.quality }.average().toFloat()
     }
@@ -163,7 +177,22 @@ class RosterViewModel(private val container: AppContainer) : ViewModel() {
 
     // ---- Enrolment -------------------------------------------------------------
 
+    /**
+     * Opens (or resumes) enrolment for one person.
+     *
+     * Resuming matters: the screen calls this from a `LaunchedEffect`, which runs again
+     * after any activity recreation — and picking a photo from the system picker can
+     * recreate the activity on a memory-tight device. Wiping unconditionally meant every
+     * photo you added silently threw away the one before it, so the count could never
+     * get past one.
+     */
     fun beginEnrolment(attendeeId: String) {
+        if (_enrol.value.attendee?.id == attendeeId && !_enrol.value.saved) {
+            // Already mid-enrolment for this person — keep the samples, refresh the record.
+            _enrol.value = _enrol.value.copy(attendee = attendee(attendeeId) ?: _enrol.value.attendee)
+            return
+        }
+        endEnrolment()
         _enrol.value = EnrolState(attendee = attendee(attendeeId))
     }
 
@@ -227,7 +256,8 @@ class RosterViewModel(private val container: AppContainer) : ViewModel() {
                     message = if (added.size >= MIN_SAMPLES) {
                         "Looking good — you can save, or capture a couple more for accuracy."
                     } else {
-                        "Captured ${added.size} of $MIN_SAMPLES. Change angle slightly and capture again."
+                        "Captured ${added.size} of $MIN_SAMPLES. Change the angle slightly and " +
+                            "capture again — or save now and add more later."
                     },
                 )
             } catch (t: Throwable) {
@@ -236,54 +266,99 @@ class RosterViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    /** Captures samples from a photo the user picked. */
-    fun captureFromUri(uri: Uri) {
+    /** Captures a sample from each photo the user picked. */
+    fun captureFromUris(uris: List<Uri>) {
+        if (uris.isEmpty()) return
         val pipeline = container.facePipeline
         if (pipeline == null) {
             _enrol.value = _enrol.value.copy(error = AppError.ModelUnavailable())
             return
         }
-        _enrol.value = _enrol.value.copy(capturing = true)
+        if (_enrol.value.capturing) return
+
+        _enrol.value = _enrol.value.copy(capturing = true, error = null)
         viewModelScope.launch {
+            var accepted = 0
+            var noFace = 0
+            var unreadable = 0
             try {
-                val bitmap = withContext(container.dispatchers.io) {
-                    container.appContext.contentResolver.openInputStream(uri)?.use { stream ->
-                        android.graphics.BitmapFactory.decodeStream(stream)
+                for (uri in uris) {
+                    if (_enrol.value.samples.size >= MAX_SAMPLES) break
+                    when (val outcome = importPhoto(pipeline, uri)) {
+                        is PhotoOutcome.Added -> {
+                            accepted++
+                            _enrol.value = _enrol.value.copy(
+                                samples = _enrol.value.samples + outcome.sample,
+                            )
+                        }
+                        PhotoOutcome.NoFace -> noFace++
+                        PhotoOutcome.Unreadable -> unreadable++
                     }
                 }
-                if (bitmap == null) {
-                    _enrol.value = _enrol.value.copy(
-                        capturing = false,
-                        error = AppError.UnreadableFile("that photo"),
-                    )
-                    return@launch
-                }
-                val sample = withContext(container.dispatchers.default) {
-                    val scaled = ai.sotto.assistant.vision.FaceImaging.downscale(bitmap, 1_280)
-                    try {
-                        pipeline.embedStill(scaled)
-                    } finally {
-                        if (scaled !== bitmap && !scaled.isRecycled) scaled.recycle()
-                        if (!bitmap.isRecycled) bitmap.recycle()
-                    }
-                }
-                if (sample == null) {
-                    _enrol.value = _enrol.value.copy(
-                        capturing = false,
-                        message = "Couldn't find a face in that photo. Try one where they're facing the camera.",
-                    )
-                    return@launch
-                }
-                val added = _enrol.value.samples +
-                    EnrolState.Sample(sample.embedding, sample.quality, sample.crop)
                 _enrol.value = _enrol.value.copy(
-                    samples = added,
                     capturing = false,
-                    message = "Added a photo. ${added.size} of $MIN_SAMPLES captured.",
+                    message = photoImportMessage(accepted, noFace, unreadable, _enrol.value.samples.size),
                 )
             } catch (t: Throwable) {
                 _enrol.value = _enrol.value.copy(capturing = false, error = AppError.from(t))
             }
+        }
+    }
+
+    private sealed interface PhotoOutcome {
+        data class Added(val sample: EnrolState.Sample) : PhotoOutcome
+        data object NoFace : PhotoOutcome
+        data object Unreadable : PhotoOutcome
+    }
+
+    private suspend fun importPhoto(
+        pipeline: ai.sotto.assistant.vision.FacePipeline,
+        uri: Uri,
+    ): PhotoOutcome {
+        val bitmap = withContext(container.dispatchers.io) {
+            runCatching {
+                container.appContext.contentResolver.openInputStream(uri)?.use { stream ->
+                    android.graphics.BitmapFactory.decodeStream(stream)
+                }
+            }.getOrNull()
+        } ?: return PhotoOutcome.Unreadable
+
+        val sample = withContext(container.dispatchers.default) {
+            val scaled = ai.sotto.assistant.vision.FaceImaging.downscale(bitmap, 1_280)
+            try {
+                pipeline.embedStill(scaled)
+            } finally {
+                if (scaled !== bitmap && !scaled.isRecycled) scaled.recycle()
+                if (!bitmap.isRecycled) bitmap.recycle()
+            }
+        } ?: return PhotoOutcome.NoFace
+
+        // Quality is advisory for a gallery photo — the user may have no better one, and
+        // a mediocre embedding still beats no recognition at all.
+        return PhotoOutcome.Added(EnrolState.Sample(sample.embedding, sample.quality, sample.crop))
+    }
+
+    private fun photoImportMessage(
+        accepted: Int,
+        noFace: Int,
+        unreadable: Int,
+        total: Int,
+    ): String = when {
+        accepted == 0 && noFace > 0 ->
+            "No face found in ${if (noFace == 1) "that photo" else "those $noFace photos"}. " +
+                "Try one where they're looking at the camera."
+        accepted == 0 ->
+            "Couldn't read ${if (unreadable == 1) "that photo" else "those photos"}."
+        else -> buildString {
+            append("Added $accepted photo${if (accepted == 1) "" else "s"}.")
+            if (noFace + unreadable > 0) append(" Skipped ${noFace + unreadable} with no usable face.")
+            append(
+                if (total >= MIN_SAMPLES) {
+                    " That's $total — plenty."
+                } else {
+                    " You can save now, but $MIN_SAMPLES angles recognises far more reliably."
+                }
+            )
         }
     }
 
@@ -321,7 +396,16 @@ class RosterViewModel(private val container: AppContainer) : ViewModel() {
                 container.attendeeRepository.setEmbedding(attendee.id, averaged, photoName)
                 container.faceMatcher.invalidateFor(attendee.id)
                 refreshPipeline()
-                _enrol.value = current.copy(saved = true, message = "${attendee.name} can now be recognised.")
+                _enrol.value = current.copy(
+                    saved = true,
+                    message = if (current.isReliable) {
+                        "${attendee.name} can now be recognised."
+                    } else {
+                        "${attendee.name} can now be recognised. With only " +
+                            "${current.samples.size} sample${if (current.samples.size == 1) "" else "s"} " +
+                            "this may be less reliable — re-enrol any time to add more."
+                    },
+                )
             } catch (t: Throwable) {
                 _enrol.value = _enrol.value.copy(error = AppError.from(t))
             } finally {

@@ -13,9 +13,9 @@ and most of that is waiting for Gemini to read your attendee list.
 
 | File | Use it when |
 |---|---|
-| `Sotto-1.0.5-arm64.apk` | **Start here.** Every Android phone made in the last several years. 53 MB. |
-| `Sotto-1.0.5-universal.apk` | If the arm64 one refuses to install. Works everywhere. 64 MB. |
-| `Sotto-1.0.5-arm32.apk` | Only for a genuinely old 32-bit phone. |
+| `Sotto-1.0.6-arm64.apk` | **Start here.** Every Android phone made in the last several years. 53 MB. |
+| `Sotto-1.0.6-universal.apk` | If the arm64 one refuses to install. Works everywhere. 64 MB. |
+| `Sotto-1.0.6-arm32.apk` | Only for a genuinely old 32-bit phone. |
 
 **To install:**
 
@@ -153,7 +153,7 @@ often it may speak* to 5 seconds and *How long a pause must be* to 0.5 seconds.
 
 | What you see | What's going on |
 |---|---|
-| "Sotto can't load its on-device model" | Install 1.0.5 or later. Older builds had two separate faults here — 16 KB page alignment, and a code-optimiser bug that broke face detection outright. |
+| "Sotto can't load its on-device model" | Install 1.0.6 or later. Older builds had two separate faults here — 16 KB page alignment, and a code-optimiser bug that broke face detection outright. |
 | Sotto never speaks | Check the **Assistant** dot at the top of the live screen. Amber means the Gemini key was rejected — test it in Settings. |
 | Nobody is recognised | Only enrolled people can be. Check **People** for the "Recognisable" tag. |
 | Wrong person recognised | **Settings → Face recognition →** raise *How sure Sotto must be*, or re-enrol both people in better light. |
