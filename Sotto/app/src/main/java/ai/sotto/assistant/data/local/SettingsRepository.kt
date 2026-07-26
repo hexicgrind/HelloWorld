@@ -22,6 +22,22 @@ private val Context.settingsDataStore: DataStore<Preferences> by preferencesData
  * Everything the user can tune. Defaults come straight from Design Doc 1, so an
  * untouched install behaves exactly as specified.
  */
+/** Where spoken whispers come from. */
+enum class VoiceEngine {
+    /**
+     * Android's built-in engine. No key, no network, no account — the only option that
+     * is guaranteed to work, so it is the default.
+     */
+    DEVICE,
+
+    /**
+     * Google Cloud Text-to-Speech. Better voices, but it accepts only OAuth2 /
+     * service-account credentials — an API key will always be rejected — so it is off
+     * unless the user has real credentials configured.
+     */
+    CLOUD,
+}
+
 data class SottoSettings(
     /** Design Doc 1: "confidence threshold (default zero point seven)". */
     val matchThreshold: Float = DEFAULT_MATCH_THRESHOLD,
@@ -34,8 +50,9 @@ data class SottoSettings(
     /** Design Doc 1: live web search is "an exception, not the rule". */
     val allowWebSearch: Boolean = true,
     val showTranscript: Boolean = false,
-    val useCloudTranscription: Boolean = true,
-    val useCloudTts: Boolean = true,
+    val useCloudTranscription: Boolean = false,
+    val voiceEngine: VoiceEngine = VoiceEngine.DEVICE,
+    val deviceVoice: String = "",
     val preferBluetoothOutput: Boolean = true,
     val whisperVolume: Float = DEFAULT_WHISPER_VOLUME,
     val soundCuesEnabled: Boolean = true,
@@ -121,8 +138,11 @@ class SettingsRepository(private val context: Context) {
         pauseThresholdMs = this[Keys.pauseThreshold] ?: SottoSettings.DEFAULT_PAUSE_THRESHOLD_MS,
         allowWebSearch = this[Keys.allowWebSearch] ?: true,
         showTranscript = this[Keys.showTranscript] ?: false,
-        useCloudTranscription = this[Keys.useCloudStt] ?: true,
-        useCloudTts = this[Keys.useCloudTts] ?: true,
+        useCloudTranscription = this[Keys.useCloudStt] ?: false,
+        voiceEngine = this[Keys.voiceEngine]
+            ?.let { runCatching { VoiceEngine.valueOf(it) }.getOrNull() }
+            ?: VoiceEngine.DEVICE,
+        deviceVoice = this[Keys.deviceVoice] ?: "",
         preferBluetoothOutput = this[Keys.preferBluetooth] ?: true,
         whisperVolume = this[Keys.whisperVolume] ?: SottoSettings.DEFAULT_WHISPER_VOLUME,
         soundCuesEnabled = this[Keys.soundCues] ?: true,
@@ -148,7 +168,8 @@ class SettingsRepository(private val context: Context) {
         this[Keys.allowWebSearch] = s.allowWebSearch
         this[Keys.showTranscript] = s.showTranscript
         this[Keys.useCloudStt] = s.useCloudTranscription
-        this[Keys.useCloudTts] = s.useCloudTts
+        this[Keys.voiceEngine] = s.voiceEngine.name
+        this[Keys.deviceVoice] = s.deviceVoice
         this[Keys.preferBluetooth] = s.preferBluetoothOutput
         this[Keys.whisperVolume] = s.whisperVolume.coerceIn(0f, 1f)
         this[Keys.soundCues] = s.soundCuesEnabled
@@ -173,7 +194,8 @@ class SettingsRepository(private val context: Context) {
         val allowWebSearch = booleanPreferencesKey("allow_web_search")
         val showTranscript = booleanPreferencesKey("show_transcript")
         val useCloudStt = booleanPreferencesKey("use_cloud_stt")
-        val useCloudTts = booleanPreferencesKey("use_cloud_tts")
+        val voiceEngine = stringPreferencesKey("voice_engine")
+        val deviceVoice = stringPreferencesKey("device_voice")
         val preferBluetooth = booleanPreferencesKey("prefer_bluetooth")
         val whisperVolume = floatPreferencesKey("whisper_volume")
         val soundCues = booleanPreferencesKey("sound_cues")

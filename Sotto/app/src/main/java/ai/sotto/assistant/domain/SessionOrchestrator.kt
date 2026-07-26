@@ -3,6 +3,7 @@ package ai.sotto.assistant.domain
 import ai.sotto.assistant.audio.AudioCapture
 import ai.sotto.assistant.audio.AudioFormats
 import ai.sotto.assistant.audio.BluetoothAudioManager
+import ai.sotto.assistant.audio.DeviceTtsEngine
 import ai.sotto.assistant.audio.SoundCues
 import ai.sotto.assistant.audio.VoiceActivityDetector
 import ai.sotto.assistant.audio.WhisperPlayer
@@ -12,6 +13,7 @@ import ai.sotto.assistant.core.SLog
 import ai.sotto.assistant.data.local.AttendeeRepository
 import ai.sotto.assistant.data.local.SettingsRepository
 import ai.sotto.assistant.data.local.SottoSettings
+import ai.sotto.assistant.data.local.VoiceEngine
 import ai.sotto.assistant.data.model.Attendee
 import ai.sotto.assistant.data.model.PipelineHealth
 import ai.sotto.assistant.data.model.Speaker
@@ -58,6 +60,7 @@ class SessionOrchestrator(
     private val restClient: GeminiRestClient,
     private val textToSpeech: TextToSpeechClient,
     private val player: WhisperPlayer,
+    private val deviceTts: DeviceTtsEngine,
     private val bluetooth: BluetoothAudioManager,
     private val soundCues: SoundCues,
     private val repository: AttendeeRepository,
@@ -195,6 +198,7 @@ class SessionOrchestrator(
 
     private fun teardown() {
         runCatching { player.stop() }
+        runCatching { deviceTts.stop() }
         runCatching { audioCapture.stop() }
         runCatching { liveClient.disconnect(notify = false) }
         runCatching { bluetooth.stopSco() }
@@ -537,24 +541,11 @@ class SessionOrchestrator(
 
         try {
             reconnectAttempts = 0
-            val audio = if (settings.useCloudTts) {
-                textToSpeech.synthesize(
-                    text = suggestion.text,
-                    voiceName = settings.ttsVoice,
-                    languageCode = settings.sttLanguage,
-                    speakingRate = settings.speakingRate,
-                )
-            } else {
-                null
+            val spoken = when (settings.voiceEngine) {
+                VoiceEngine.CLOUD -> speakViaCloud(suggestion) || speakViaDevice(suggestion)
+                VoiceEngine.DEVICE -> speakViaDevice(suggestion)
             }
-
-            if (audio != null) {
-                player.volume = settings.whisperVolume
-                player.play(audio.pcm, audio.sampleRateHz)
-                _health.value = _health.value.copy(audioOutOk = true)
-            } else if (settings.useCloudTts) {
-                _health.value = _health.value.copy(audioOutOk = false)
-            }
+            _health.value = _health.value.copy(audioOutOk = spoken)
 
             _suggestions.value = _suggestions.value.map {
                 if (it.id == suggestion.id) it.copy(spokenAtMs = clock()) else it
@@ -575,6 +566,47 @@ class SessionOrchestrator(
                 if (_currentWhisper.value?.id == suggestion.id) _currentWhisper.value = null
             }
         }
+    }
+
+    /**
+     * Google Cloud Text-to-Speech. Only usable with real OAuth2 credentials — an API
+     * key is always rejected — so a failure here is expected on most installs and must
+     * fall through to the device engine rather than leaving the user in silence.
+     */
+    private suspend fun speakViaCloud(suggestion: Suggestion): Boolean = try {
+        val audio = textToSpeech.synthesize(
+            text = suggestion.text,
+            voiceName = settings.ttsVoice,
+            languageCode = settings.sttLanguage,
+            speakingRate = settings.speakingRate,
+        )
+        if (audio != null) {
+            player.volume = settings.whisperVolume
+            player.play(audio.pcm, audio.sampleRateHz)
+            true
+        } else {
+            false
+        }
+    } catch (e: AppError) {
+        SLog.w(TAG, "Cloud voice unavailable, using the phone's: ${e.userMessage}")
+        false
+    } catch (t: Throwable) {
+        SLog.w(TAG, "Cloud voice unavailable, using the phone's", t)
+        false
+    }
+
+    /** The phone's own engine: no key, no network, always available. */
+    private suspend fun speakViaDevice(suggestion: Suggestion): Boolean = try {
+        deviceTts.speak(
+            text = suggestion.text,
+            speakingRate = settings.speakingRate,
+            volume = settings.whisperVolume,
+            languageTag = settings.sttLanguage,
+            voiceName = settings.deviceVoice.takeIf { it.isNotBlank() },
+        )
+    } catch (t: Throwable) {
+        SLog.w(TAG, "Device speech failed", t)
+        false
     }
 
     /** Reads a whisper again on demand — the "replay" button on the live screen. */

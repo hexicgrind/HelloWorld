@@ -13,9 +13,9 @@ and most of that is waiting for Gemini to read your attendee list.
 
 | File | Use it when |
 |---|---|
-| `Sotto-1.0.1-arm64.apk` | **Start here.** Every Android phone made in the last several years. 47 MB. |
-| `Sotto-1.0.1-universal.apk` | If the arm64 one refuses to install. Works everywhere. 58 MB. |
-| `Sotto-1.0.1-arm32.apk` | Only for a genuinely old 32-bit phone. |
+| `Sotto-1.0.5-arm64.apk` | **Start here.** Every Android phone made in the last several years. 53 MB. |
+| `Sotto-1.0.5-universal.apk` | If the arm64 one refuses to install. Works everywhere. 64 MB. |
+| `Sotto-1.0.5-arm32.apk` | Only for a genuinely old 32-bit phone. |
 
 **To install:**
 
@@ -33,31 +33,39 @@ The app is signed and will update in place if you install a newer build later.
 
 ## 2. Get a Google API key
 
-Sotto uses three Google APIs. **One key covers all three**, and you only have to do
-this once.
+**You need exactly one key, and nothing else.**
 
 1. Go to **https://aistudio.google.com/app/apikey** and sign in.
 2. Tap **Create API key**. Choose an existing Google Cloud project, or let it make one.
 3. Copy the key — it starts with `AIza…`.
 
-That key already works for Gemini. For the voice and transcription to work too, enable
-two more APIs on the *same* Google Cloud project:
-
-4. Go to **https://console.cloud.google.com/apis/library**, make sure the project
-   selector at the top shows the project your key belongs to, then search for and
-   **Enable** each of:
-   - **Cloud Text-to-Speech API**
-   - **Cloud Speech-to-Text API**
-
-> **Will this cost money?** Both have a free tier that comfortably covers testing around
-> the house — Text-to-Speech gives you 1 million characters a month free, Speech-to-Text
-> 60 minutes a month. Gemini's free tier covers the assistant. Google may ask you to
-> attach a billing account to enable the Cloud APIs even while you stay inside the free
-> tier. If you'd rather not, see "Running without the Cloud APIs" at the bottom — Sotto
-> still works, it just gets quieter.
-
 **Then, in Sotto:** open **Settings → API keys**, paste the key, tap **Save keys**, then
 tap **Test my key**. It'll tell you straight away whether it works.
+
+That's it. Don't enable anything in the Google Cloud console — you don't need to.
+
+> **Will this cost money?** Gemini's free tier covers everything Sotto sends to Google,
+> and the voice runs on your phone for free. No billing account is required.
+
+<details>
+<summary>Why the voice comes from your phone, not from Google</summary>
+
+Earlier builds tried to use Google Cloud Text-to-Speech and Cloud Speech-to-Text.
+Both of those APIs **refuse API keys outright** — they accept only OAuth2 /
+service-account credentials, which means downloading a credentials file and keeping
+it on your phone. That's both a nuisance and a genuinely bad idea security-wise.
+
+So Sotto doesn't use them by default:
+
+- **The voice** comes from Android's own speech engine. No key, no network, no
+  account, and it works in flight mode.
+- **The transcript** comes from Gemini Live's own transcription, which *does* work
+  with your API key.
+
+Both options are still in **Settings → Voice** and **Settings → Advanced** if you
+happen to have service-account credentials, but you almost certainly don't want them.
+
+</details>
 
 ---
 
@@ -145,24 +153,24 @@ often it may speak* to 5 seconds and *How long a pause must be* to 0.5 seconds.
 
 | What you see | What's going on |
 |---|---|
-| "Sotto can't load its on-device model" | You're on 1.0.0. Install 1.0.1 or later — 1.0.0's face libraries can't load on phones with 16 KB memory pages (Android 16 and most new hardware). |
+| "Sotto can't load its on-device model" | Install 1.0.5 or later. Older builds had two separate faults here — 16 KB page alignment, and a code-optimiser bug that broke face detection outright. |
 | Sotto never speaks | Check the **Assistant** dot at the top of the live screen. Amber means the Gemini key was rejected — test it in Settings. |
 | Nobody is recognised | Only enrolled people can be. Check **People** for the "Recognisable" tag. |
 | Wrong person recognised | **Settings → Face recognition →** raise *How sure Sotto must be*, or re-enrol both people in better light. |
 | Whispers come from the phone speaker | The earpiece isn't connected. Check the **Earpiece** screen. |
-| Names appear but there's no voice | Cloud Text-to-Speech isn't enabled on your project, or isn't covered by your key. |
-| The transcript stays empty | Cloud Speech-to-Text isn't enabled. The assistant still works — it hears the raw audio directly. |
+| Names appear but there's no voice | Your phone has no speech engine set up. Open Android **Settings → Accessibility → Text-to-speech output** and pick an engine, then try **Hear it** in Sotto's Voice settings. |
+| The voice sounds robotic | Same screen — install *Google Speech Services* voices, then pick a "high quality" one in Sotto's **Settings → Voice**. |
+| The transcript stays empty | Gemini Live hasn't connected. Check the **Assistant** dot at the top of the live screen. |
 | It talks too much | **Settings → How Sotto behaves →** raise the interval or lengthen the required pause. |
 
-### Running without the Cloud APIs
+### If you do have service-account credentials
 
-If you only want to use the free Gemini key and skip the two Cloud APIs:
-
-**Settings → Advanced →** turn off *Transcribe with Google Cloud* and *Speak with Google
-Cloud voices*.
-
-Sotto then reads its own transcript from Gemini and shows whispers on screen instead of
-speaking them. Recognition and suggestions still work fully.
+Google's Cloud Text-to-Speech and Speech-to-Text APIs reject API keys, so Sotto uses
+your phone's voice and Gemini's own transcription instead. Both cloud paths are still
+selectable — **Settings → Voice → Voice source** and **Settings → Advanced → Transcribe
+with Google Cloud** — but with only an API key they will be turned down and Sotto will
+quietly fall back. There is no reason to switch them on unless you have real OAuth2
+credentials.
 
 ---
 
@@ -174,8 +182,10 @@ speaking them. Recognition and suggestions still work fully.
   private storage and are excluded from cloud backup.
 - Your API key is encrypted with your phone's hardware keystore, is never logged, and is
   only ever sent to the Google endpoint it belongs to.
-- While a session is running, microphone audio goes to Google Speech-to-Text and the
-  Gemini Live API. Nowhere else, and nothing is retained after the session ends.
+- While a session is running, microphone audio goes to the Gemini Live API. Nowhere
+  else, and nothing is retained after the session ends.
+- **Whispers are spoken on the phone.** The text of a whisper is not sent anywhere to be
+  turned into speech.
 - To wipe everything: **People → Remove** each person, and **Settings → Remove all keys**.
   Or just uninstall.
 

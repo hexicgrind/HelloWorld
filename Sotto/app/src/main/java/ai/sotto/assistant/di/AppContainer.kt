@@ -2,6 +2,7 @@ package ai.sotto.assistant.di
 
 import ai.sotto.assistant.audio.AudioCapture
 import ai.sotto.assistant.audio.BluetoothAudioManager
+import ai.sotto.assistant.audio.DeviceTtsEngine
 import ai.sotto.assistant.audio.SoundCues
 import ai.sotto.assistant.audio.WhisperPlayer
 import ai.sotto.assistant.core.DispatcherProvider
@@ -66,6 +67,8 @@ class AppContainer(
     val audioCapture: AudioCapture by lazy { AudioCapture(appContext) }
 
     val whisperPlayer: WhisperPlayer by lazy { WhisperPlayer(appContext, dispatchers.io) }
+
+    val deviceTts: DeviceTtsEngine by lazy { DeviceTtsEngine(appContext) }
 
     val bluetoothManager: BluetoothAudioManager by lazy { BluetoothAudioManager(appContext) }
 
@@ -154,6 +157,7 @@ class AppContainer(
                 restClient = geminiRest,
                 textToSpeech = textToSpeech,
                 player = whisperPlayer,
+                deviceTts = deviceTts,
                 bluetooth = bluetoothManager,
                 soundCues = soundCues,
                 repository = attendeeRepository,
@@ -176,6 +180,7 @@ class AppContainer(
 
     fun release() {
         runCatching { sessionOrchestrator?.release() }
+        runCatching { deviceTts.close() }
     }
 
     private companion object {

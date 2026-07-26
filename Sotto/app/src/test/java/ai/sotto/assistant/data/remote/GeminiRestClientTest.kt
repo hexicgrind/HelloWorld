@@ -319,13 +319,35 @@ class GeminiRestClientTest {
     }
 
     @Test
-    fun `a 401 becomes Unauthorized`() = runBlocking {
-        server.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":{"message":"bad key"}}"""))
-        try {
-            client.enrich(listOf(GeminiRestClient.SourcePart.Text("x")), "gemini-2.0-flash")
-            throw AssertionError("expected Unauthorized")
-        } catch (e: AppError.Unauthorized) {
-            assertThat(e.recovery).contains("Settings")
+    fun `a 401 keeps the reason the service gave`() {
+        // Swallowing this message once cost a user two API keys and a lot of time: the
+        // generic "check your key" advice hid the fact that the service had said
+        // something far more specific.
+        server.enqueue(
+            MockResponse().setResponseCode(401)
+                .setBody("""{"error":{"message":"API key not valid. Please pass a valid API key."}}""")
+        )
+        runBlocking {
+            try {
+                client.enrich(listOf(GeminiRestClient.SourcePart.Text("x")), "gemini-2.0-flash")
+                throw AssertionError("expected Rejected")
+            } catch (e: AppError.Rejected) {
+                assertThat(e.detail).contains("API key not valid")
+                assertThat(e.recovery!!.lowercase()).contains("check the key")
+            }
+        }
+    }
+
+    @Test
+    fun `a 401 with no explanation still points at Settings`() {
+        server.enqueue(MockResponse().setResponseCode(401))
+        runBlocking {
+            try {
+                client.enrich(listOf(GeminiRestClient.SourcePart.Text("x")), "gemini-2.0-flash")
+                throw AssertionError("expected Unauthorized")
+            } catch (e: AppError.Unauthorized) {
+                assertThat(e.recovery).contains("Settings")
+            }
         }
     }
 

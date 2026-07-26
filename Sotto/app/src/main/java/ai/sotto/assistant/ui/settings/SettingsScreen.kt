@@ -2,6 +2,7 @@ package ai.sotto.assistant.ui.settings
 
 import ai.sotto.assistant.data.local.ApiService
 import ai.sotto.assistant.data.local.SottoSettings
+import ai.sotto.assistant.data.local.VoiceEngine
 import ai.sotto.assistant.data.remote.TextToSpeechClient
 import ai.sotto.assistant.ui.components.DebouncedTextField
 import ai.sotto.assistant.ui.components.ErrorNotice
@@ -305,10 +306,33 @@ fun SettingsScreen(
             // ---- Voice ------------------------------------------------------------
             item {
                 SectionCard(title = "Voice", subtitle = "What the whisper sounds like in your ear.") {
-                    VoicePicker(
-                        selected = state.settings.ttsVoice,
-                        onSelected = { v -> viewModel.update { it.copy(ttsVoice = v) } },
+                    VoiceEnginePicker(
+                        selected = state.settings.voiceEngine,
+                        onSelected = { v -> viewModel.update { it.copy(voiceEngine = v) } },
                     )
+                    Spacer(Modifier.height(14.dp))
+
+                    when (state.settings.voiceEngine) {
+                        VoiceEngine.DEVICE -> DeviceVoicePicker(
+                            selected = state.settings.deviceVoice,
+                            options = state.deviceVoices,
+                            onSelected = { v -> viewModel.update { it.copy(deviceVoice = v) } },
+                        )
+                        VoiceEngine.CLOUD -> {
+                            Notice(
+                                text = "Cloud voices need service-account credentials.",
+                                detail = "Google Cloud Text-to-Speech does not accept API keys, " +
+                                    "only OAuth2 credentials. With just a key this will be " +
+                                    "rejected and Sotto will fall back to the phone's voice.",
+                                tone = NoticeTone.WARNING,
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            VoicePicker(
+                                selected = state.settings.ttsVoice,
+                                onSelected = { v -> viewModel.update { it.copy(ttsVoice = v) } },
+                            )
+                        }
+                    }
                     Spacer(Modifier.height(16.dp))
                     SliderRow(
                         label = "Speaking speed",
@@ -409,20 +433,16 @@ fun SettingsScreen(
                 ) {
                     ToggleRow(
                         title = "Transcribe with Google Cloud",
-                        detail = "Off means Sotto relies on Gemini's own transcription instead.",
+                        detail = "Off (recommended) uses Gemini's own transcription, which works " +
+                            "with your API key. Cloud Speech-to-Text needs service-account " +
+                            "credentials and will be rejected by a key.",
                         checked = state.settings.useCloudTranscription,
                         onCheckedChange = { v ->
                             viewModel.update { it.copy(useCloudTranscription = v) }
                         },
                     )
                     Spacer(Modifier.height(12.dp))
-                    ToggleRow(
-                        title = "Speak with Google Cloud voices",
-                        detail = "Off silences spoken whispers — you'll only read them on screen.",
-                        checked = state.settings.useCloudTts,
-                        onCheckedChange = { v -> viewModel.update { it.copy(useCloudTts = v) } },
-                    )
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(4.dp))
                     ModelPicker(
                         label = "Model for preparing data",
                         selected = state.settings.enrichmentModel,
@@ -713,6 +733,104 @@ private fun ModelPicker(
                     },
                     onClick = {
                         onSelected(model.id)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun VoiceEnginePicker(
+    selected: VoiceEngine,
+    onSelected: (VoiceEngine) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    fun label(engine: VoiceEngine) = when (engine) {
+        VoiceEngine.DEVICE -> "This phone (free, works offline)"
+        VoiceEngine.CLOUD -> "Google Cloud (needs service-account credentials)"
+    }
+
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+        OutlinedTextField(
+            value = label(selected),
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Voice source") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(androidx.compose.material3.MenuAnchorType.PrimaryNotEditable),
+            shape = MaterialTheme.shapes.medium,
+            textStyle = MaterialTheme.typography.bodyMedium,
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            VoiceEngine.entries.forEach { engine ->
+                DropdownMenuItem(
+                    text = { Text(label(engine), style = MaterialTheme.typography.bodyMedium) },
+                    onClick = {
+                        onSelected(engine)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DeviceVoicePicker(
+    selected: String,
+    options: List<ai.sotto.assistant.audio.DeviceTtsEngine.VoiceOption>,
+    onSelected: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val current = options.firstOrNull { it.id == selected }
+
+    ExposedDropdownMenuBox(
+        expanded = expanded && options.isNotEmpty(),
+        onExpandedChange = { if (options.isNotEmpty()) expanded = it },
+    ) {
+        OutlinedTextField(
+            value = current?.label ?: "Your phone's default voice",
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Voice") },
+            supportingText = {
+                Text(
+                    if (options.isEmpty()) {
+                        "Using whatever voice your phone is set to."
+                    } else {
+                        "${options.size} voices installed on this phone."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(androidx.compose.material3.MenuAnchorType.PrimaryNotEditable),
+            shape = MaterialTheme.shapes.medium,
+            textStyle = MaterialTheme.typography.bodyMedium,
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Your phone's default voice") },
+                onClick = {
+                    onSelected("")
+                    expanded = false
+                },
+            )
+            options.forEach { voice ->
+                DropdownMenuItem(
+                    text = {
+                        Text(voice.label, style = MaterialTheme.typography.bodySmall)
+                    },
+                    onClick = {
+                        onSelected(voice.id)
                         expanded = false
                     },
                 )

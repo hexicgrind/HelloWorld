@@ -2,6 +2,7 @@ package ai.sotto.assistant.domain
 
 import ai.sotto.assistant.audio.AudioCapture
 import ai.sotto.assistant.audio.BluetoothAudioManager
+import ai.sotto.assistant.audio.DeviceTtsEngine
 import ai.sotto.assistant.audio.SoundCues
 import ai.sotto.assistant.audio.WhisperPlayer
 import ai.sotto.assistant.core.AppError
@@ -9,8 +10,10 @@ import ai.sotto.assistant.core.DispatcherProvider
 import ai.sotto.assistant.data.local.AttendeeRepository
 import ai.sotto.assistant.data.local.SettingsRepository
 import ai.sotto.assistant.data.local.SottoSettings
+import ai.sotto.assistant.data.local.VoiceEngine
 import ai.sotto.assistant.data.model.Attendee
 import ai.sotto.assistant.data.model.ConferenceDatabase
+import ai.sotto.assistant.data.model.Suggestion
 import ai.sotto.assistant.data.model.SuggestionKind
 import ai.sotto.assistant.data.remote.GeminiLiveClient
 import ai.sotto.assistant.data.remote.GeminiRestClient
@@ -29,6 +32,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import com.google.common.truth.Truth.assertThat
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CoroutineDispatcher
@@ -98,6 +102,7 @@ class SessionOrchestratorTest {
     private lateinit var live: GeminiLiveClient
     private lateinit var rest: GeminiRestClient
     private lateinit var tts: TextToSpeechClient
+    private lateinit var deviceTts: DeviceTtsEngine
     private lateinit var player: WhisperPlayer
     private lateinit var bluetooth: BluetoothAudioManager
     private lateinit var cues: SoundCues
@@ -144,6 +149,8 @@ class SessionOrchestratorTest {
         stt = mockk(relaxed = true)
         rest = mockk(relaxed = true)
         tts = mockk(relaxed = true)
+        deviceTts = mockk(relaxed = true)
+        coEvery { deviceTts.speak(any(), any(), any(), any(), any()) } returns true
         player = mockk(relaxed = true)
         bluetooth = mockk(relaxed = true)
         cues = mockk(relaxed = true)
@@ -161,6 +168,7 @@ class SessionOrchestratorTest {
         liveClient = live,
         restClient = rest,
         textToSpeech = tts,
+        deviceTts = deviceTts,
         player = player,
         bluetooth = bluetooth,
         soundCues = cues,
@@ -347,6 +355,170 @@ class SessionOrchestratorTest {
 
         assertThat(session.target.value)
             .isEqualTo(ai.sotto.assistant.data.model.TargetState.NoFace)
+    }
+
+    // ---- Voice output ----------------------------------------------------------------
+    //
+    // Cloud Text-to-Speech only accepts OAuth2 / service-account credentials — it
+    // refuses API keys outright. A user with a valid Gemini key was therefore left in
+    // total silence with no way to fix it. The phone's own engine is now the default,
+    // and the cloud path must never be able to strand the user again.
+
+    private fun whisper(text: String = "Ada leads the compiler team.") = Suggestion(
+        id = 1L,
+        text = text,
+        kind = SuggestionKind.GENERIC,
+        attendeeId = null,
+        createdAtMs = now,
+    )
+
+    private fun settingsOf(s: SottoSettings) {
+        every { settings.settings } returns flowOf(s)
+        coEvery { settings.current() } returns s
+    }
+
+    @Test
+    fun `the phone's own engine speaks by default`() {
+        val session = orchestrator(dispatcher)
+        session.start()
+
+        session.replay(whisper())
+
+        coVerify { deviceTts.speak(text = "Ada leads the compiler team.", any(), any(), any(), any()) }
+        // No cloud call at all: it cannot work with an API key.
+        coVerify(exactly = 0) { tts.synthesize(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `a cloud voice failure falls back to the phone rather than silence`() {
+        settingsOf(SottoSettings(voiceEngine = VoiceEngine.CLOUD))
+        coEvery { tts.synthesize(any(), any(), any(), any(), any()) } throws
+            AppError.Rejected("Text-to-Speech", "API keys are not supported by this API.")
+
+        val session = orchestrator(dispatcher)
+        session.start()
+
+        session.replay(whisper())
+
+        coVerify { deviceTts.speak(any(), any(), any(), any(), any()) }
+        assertThat(session.health.value.audioOutOk).isTrue()
+    }
+
+    @Test
+    fun `an empty cloud response also falls back to the phone`() {
+        settingsOf(SottoSettings(voiceEngine = VoiceEngine.CLOUD))
+        coEvery { tts.synthesize(any(), any(), any(), any(), any()) } returns null
+
+        val session = orchestrator(dispatcher)
+        session.start()
+
+        session.replay(whisper())
+
+        coVerify { deviceTts.speak(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `the cloud voice is used when it actually works`() {
+        settingsOf(SottoSettings(voiceEngine = VoiceEngine.CLOUD))
+        coEvery { tts.synthesize(any(), any(), any(), any(), any()) } returns
+            TextToSpeechClient.Audio(ByteArray(320), 24_000)
+
+        val session = orchestrator(dispatcher)
+        session.start()
+
+        session.replay(whisper())
+
+        coVerify { player.play(any(), 24_000) }
+        coVerify(exactly = 0) { deviceTts.speak(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `losing both voices is reported rather than hidden`() {
+        settingsOf(SottoSettings(voiceEngine = VoiceEngine.CLOUD))
+        coEvery { tts.synthesize(any(), any(), any(), any(), any()) } returns null
+        coEvery { deviceTts.speak(any(), any(), any(), any(), any()) } returns false
+
+        val session = orchestrator(dispatcher)
+        session.start()
+
+        session.replay(whisper())
+
+        assertThat(session.health.value.audioOutOk).isFalse()
+    }
+
+    @Test
+    fun `a device engine crash does not take the session down`() {
+        coEvery { deviceTts.speak(any(), any(), any(), any(), any()) } throws
+            IllegalStateException("engine died")
+
+        val session = orchestrator(dispatcher)
+        session.start()
+
+        session.replay(whisper())
+
+        assertThat(session.health.value.audioOutOk).isFalse()
+        assertThat(session.state.value).isEqualTo(SessionOrchestrator.State.RUNNING)
+    }
+
+    @Test
+    fun `the chosen device voice and volume are passed through`() {
+        settingsOf(
+            SottoSettings(
+                voiceEngine = VoiceEngine.DEVICE,
+                deviceVoice = "en-gb-x-gba-local",
+                whisperVolume = 0.42f,
+                speakingRate = 1.15f,
+            )
+        )
+
+        val session = orchestrator(dispatcher)
+        session.start()
+
+        session.replay(whisper())
+
+        coVerify {
+            deviceTts.speak(
+                text = any(),
+                speakingRate = 1.15f,
+                volume = 0.42f,
+                languageTag = any(),
+                voiceName = "en-gb-x-gba-local",
+            )
+        }
+    }
+
+    @Test
+    fun `no device voice chosen means the engine picks its own`() {
+        val session = orchestrator(dispatcher)
+        session.start()
+
+        session.replay(whisper())
+
+        coVerify {
+            deviceTts.speak(any(), any(), any(), any(), voiceName = null)
+        }
+    }
+
+    @Test
+    fun `the microphone is muted while a whisper plays and unmuted afterwards`() {
+        val session = orchestrator(dispatcher)
+        session.start()
+
+        session.replay(whisper())
+
+        // Verified after the fact: leaving it muted would deafen the session.
+        io.mockk.verify { audioCapture.muted = true }
+        io.mockk.verify { audioCapture.muted = false }
+    }
+
+    @Test
+    fun `stopping silences the phone's engine too`() {
+        val session = orchestrator(dispatcher)
+        session.start()
+
+        session.stop()
+
+        io.mockk.verify { deviceTts.stop() }
     }
 
     // ---- Housekeeping --------------------------------------------------------------------

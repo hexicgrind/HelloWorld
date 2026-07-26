@@ -27,6 +27,29 @@ sealed class AppError(
         recovery = "Double-check the key in Settings, and make sure the API is enabled for it.",
     )
 
+    /**
+     * A 401/403 where the service told us why.
+     *
+     * Distinct from [Unauthorized] because the reason matters enormously: "API key not
+     * valid" is fixable by the user, whereas "API keys are not supported by this API"
+     * means no amount of key-fiddling will ever work.
+     */
+    class Rejected(val service: String, val detail: String) : AppError(
+        userMessage = "$service turned the request down.",
+        recovery = when {
+            detail.contains("not supported by this API", ignoreCase = true) ||
+                detail.contains("OAuth2 access token", ignoreCase = true) ->
+                "This service doesn't accept API keys at all — it needs service-account " +
+                    "credentials. Sotto will use an alternative where it can."
+            detail.contains("has not been used", ignoreCase = true) ||
+                detail.contains("is disabled", ignoreCase = true) ->
+                "Enable this API on your Google Cloud project, then try again."
+            detail.contains("API key not valid", ignoreCase = true) ->
+                "Check the key in Settings — it looks incorrect."
+            else -> detail.take(240)
+        },
+    )
+
     class RateLimited(val service: String) : AppError(
         userMessage = "$service is asking us to slow down.",
         recovery = "Wait a minute and try again.",

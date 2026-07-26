@@ -111,6 +111,58 @@ class AppErrorTest {
         assertThat(AppError.ServiceFailure("Gemini", "   ").recovery).isNotEmpty()
     }
 
+    // ---- Rejected -----------------------------------------------------------------
+    //
+    // A 401/403 used to collapse into "check your key and make sure the API is enabled".
+    // That advice was wrong for Cloud Speech-to-Text and Text-to-Speech, which reject
+    // API keys outright — the user enabled both APIs, tried two keys, and could never
+    // have succeeded. The service's own words have to survive.
+
+    @Test
+    fun `an API that refuses keys outright says so`() {
+        val error = AppError.Rejected(
+            "Text-to-Speech",
+            "API keys are not supported by this API. Expected OAuth2 access token or other " +
+                "authentication credentials that assert a principal.",
+        )
+        assertThat(error.recovery!!.lowercase()).contains("doesn't accept api keys")
+        assertThat(error.recovery!!.lowercase()).contains("service-account")
+        // Must not send the user back to enable an API they already enabled.
+        assertThat(error.recovery!!.lowercase()).doesNotContain("enable this api")
+    }
+
+    @Test
+    fun `a genuinely disabled API does advise enabling it`() {
+        val error = AppError.Rejected(
+            "Speech-to-Text",
+            "Cloud Speech-to-Text API has not been used in project 123 before or it is disabled.",
+        )
+        assertThat(error.recovery!!.lowercase()).contains("enable this api")
+    }
+
+    @Test
+    fun `a malformed key advises checking the key`() {
+        val error = AppError.Rejected("Gemini", "API key not valid. Please pass a valid API key.")
+        assertThat(error.recovery!!.lowercase()).contains("check the key")
+    }
+
+    @Test
+    fun `an unrecognised reason is passed through verbatim`() {
+        val error = AppError.Rejected("Gemini", "Requests from this Android client are blocked.")
+        assertThat(error.recovery).contains("blocked")
+    }
+
+    @Test
+    fun `the rejection names the service`() {
+        assertThat(AppError.Rejected("Text-to-Speech", "x").userMessage).contains("Text-to-Speech")
+    }
+
+    @Test
+    fun `a very long reason is truncated`() {
+        assertThat(AppError.Rejected("Gemini", "x".repeat(2_000)).recovery!!.length)
+            .isAtMost(240)
+    }
+
     // ---- ModelUnavailable -------------------------------------------------------
     //
     // These exist because the first version of this error told users to reinstall no

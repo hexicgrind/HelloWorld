@@ -4,6 +4,7 @@ import ai.sotto.assistant.core.AppError
 import ai.sotto.assistant.data.local.ApiService
 import ai.sotto.assistant.data.local.SecureKeyStore
 import ai.sotto.assistant.data.local.SottoSettings
+import ai.sotto.assistant.data.local.VoiceEngine
 import ai.sotto.assistant.data.remote.GeminiRestClient
 import ai.sotto.assistant.di.AppContainer
 import ai.sotto.assistant.domain.ModelResolver
@@ -34,6 +35,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         val models: List<GeminiRestClient.ModelInfo> = emptyList(),
         val loadingModels: Boolean = false,
         val modelNotice: String? = null,
+        val deviceVoices: List<ai.sotto.assistant.audio.DeviceTtsEngine.VoiceOption> = emptyList(),
         val error: AppError? = null,
         val savedNotice: String? = null,
     )
@@ -52,6 +54,13 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         // Fetch the model list on open when a key is present, so a retired model is
         // repaired before the user next tries to prepare data.
         if (container.keyStore.has(ApiService.GEMINI)) refreshModels()
+
+        // The installed voices can only be listed once the engine has started.
+        viewModelScope.launch {
+            if (container.deviceTts.ensureReady()) {
+                _state.value = _state.value.copy(deviceVoices = container.deviceTts.voicesFor())
+            }
+        }
 
         // Pre-fill the fields with whatever is already stored.
         _state.value = _state.value.copy(
@@ -228,26 +237,44 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     /** Plays the chosen voice so the user can hear it before committing. */
     fun previewVoice() {
         viewModelScope.launch {
-            try {
-                val settings = _state.value.settings
-                val audio = container.textToSpeech.synthesize(
-                    text = "Ask them how the Berlin launch went.",
-                    voiceName = settings.ttsVoice,
-                    languageCode = settings.sttLanguage,
-                    speakingRate = settings.speakingRate,
+            val settings = _state.value.settings
+            val line = "Ask them how the Berlin launch went."
+
+            if (settings.voiceEngine == VoiceEngine.CLOUD) {
+                val played = runCatching {
+                    container.textToSpeech.synthesize(
+                        text = line,
+                        voiceName = settings.ttsVoice,
+                        languageCode = settings.sttLanguage,
+                        speakingRate = settings.speakingRate,
+                    )?.also { audio ->
+                        container.whisperPlayer.volume = settings.whisperVolume
+                        container.whisperPlayer.play(audio.pcm, audio.sampleRateHz)
+                    } != null
+                }.getOrElse { false }
+                if (played) return@launch
+
+                _state.value = _state.value.copy(
+                    savedNotice = "Cloud voices were rejected — that API needs service-account " +
+                        "credentials, not a key. Played the phone's voice instead.",
                 )
-                if (audio != null) {
-                    container.whisperPlayer.volume = settings.whisperVolume
-                    container.whisperPlayer.play(audio.pcm, audio.sampleRateHz)
-                } else {
-                    _state.value = _state.value.copy(
-                        error = AppError.ServiceFailure("Text-to-Speech", "No audio came back."),
-                    )
-                }
-            } catch (e: AppError) {
-                _state.value = _state.value.copy(error = e)
-            } catch (t: Throwable) {
-                _state.value = _state.value.copy(error = AppError.from(t))
+            }
+
+            val spoken = container.deviceTts.speak(
+                text = line,
+                speakingRate = settings.speakingRate,
+                volume = settings.whisperVolume,
+                languageTag = settings.sttLanguage,
+                voiceName = settings.deviceVoice.takeIf { it.isNotBlank() },
+            )
+            if (!spoken) {
+                _state.value = _state.value.copy(
+                    error = AppError.ServiceFailure(
+                        "Speech",
+                        "Your phone's speech engine didn't respond. Check Android Settings › " +
+                            "Accessibility › Text-to-speech output.",
+                    ),
+                )
             }
         }
     }

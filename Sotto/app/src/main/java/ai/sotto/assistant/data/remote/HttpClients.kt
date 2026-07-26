@@ -62,7 +62,12 @@ object HttpClients {
      */
     fun errorFor(service: String, response: Response, body: String?): AppError = when (response.code) {
         400 -> AppError.ServiceFailure(service, extractMessage(body) ?: "The request was rejected.")
-        401, 403 -> AppError.Unauthorized(service)
+        // Google's own message is the useful part here — it distinguishes "wrong key"
+        // from "this API does not accept API keys at all", which are very different
+        // problems. Swallowing it sent a user chasing a config error that did not exist.
+        401, 403 -> extractMessage(body)
+            ?.let { AppError.Rejected(service, it) }
+            ?: AppError.Unauthorized(service)
         429 -> AppError.RateLimited(service)
         in 500..599 -> AppError.ServiceFailure(
             service,

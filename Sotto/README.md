@@ -30,14 +30,14 @@ place in the code.
 
 ## Stack
 
-Exactly as § Technical Stack specifies, with four deviations noted below.
+Exactly as § Technical Stack specifies, with five deviations noted below.
 
 - **Min SDK 30, target SDK 35**, Kotlin 2.0, Jetpack Compose, Material 3
 - **Face detection** — MediaPipe Face Detection 0.10.26.1 (BlazeFace short-range)
 - **Face embedding** — FaceNet TFLite via LiteRT, 160×160 input → 128-d output
-- **Speech-to-Text** — Google Cloud Speech-to-Text
+- **Speech-to-Text** — Gemini Live input transcription (Cloud STT optional)
 - **Conversation** — Gemini Live API
-- **Text-to-Speech** — Google Cloud Text-to-Speech
+- **Text-to-Speech** — Android `TextToSpeech` (Cloud TTS optional)
 - **Audio out** — `AudioTrack`, routed to Bluetooth
 - **Storage** — local JSON file
 - **Networking** — OkHttp (REST + WebSocket)
@@ -50,18 +50,41 @@ Exactly as § Technical Stack specifies, with four deviations noted below.
    a genuinely bad thing to ask someone to load onto their phone. Same service, same
    message shapes, key-friendly transport.
 
-2. **Speech-to-Text is utterance-at-a-time, not a continuous gRPC stream.** Same reason:
-   Cloud's true streaming endpoint is gRPC-only. Instead the VAD segments the microphone
-   feed and posts each utterance the moment the speaker pauses. That lands in the doc's
-   500–1500 ms window, because a transcript only becomes useful at end-of-utterance
-   anyway.
+2. **Speech and voice do not use the Cloud APIs the doc names.** This is the deviation
+   that cost the most to discover. Cloud Speech-to-Text and Cloud Text-to-Speech
+   *reject API keys outright* — they accept only OAuth2 / service-account credentials.
+   No amount of enabling APIs or minting new keys can change that; a user proved it
+   with two separate keys on a correctly-configured project.
+
+   So the defaults moved to the two paths a key-holder can actually use:
+
+   - **Transcript** — Gemini Live's own `inputTranscription`, over the same
+     already-authenticated socket. Nothing extra to enable.
+   - **Voice** — Android's built-in `TextToSpeech` engine (`audio/DeviceTtsEngine.kt`).
+     No key, no network, no account, works in flight mode.
+
+   Both cloud clients remain, selectable in Settings for anyone holding real
+   credentials, and `SessionOrchestrator.speak` falls through from cloud to device
+   automatically so a rejection can never leave the user in silence. When Cloud STT
+   *is* enabled it runs utterance-at-a-time rather than as a continuous stream, since
+   Cloud's true streaming endpoint is gRPC-only; the VAD segments the feed and posts
+   each utterance at the pause, which lands inside the doc's 500–1500 ms window.
 
 3. **The FaceNet model ships as float32, not int8.** The doc asks for int8 quantisation.
    Re-quantising needs the original SavedModel, which isn't published — only the
    converted `.tflite`. It runs on XNNPACK and comfortably meets the doc's 80–120 ms
    detect-plus-embed budget; the cost is 23 MB of APK.
 
-4. **Face enrolment exists as a user-facing flow.** The doc treats embeddings as
+4. **R8's optimiser is off (`-dontoptimize`), shrinking is on.** MediaPipe logs through
+   Flogger, which resolves its logger by walking the call stack. The optimiser rewrites
+   those frames, so `FluentLogger.forEnclosingClass()` throws at class-init time and
+   face detection fails on a release build while working perfectly in debug. Shrinking
+   stays on because without it the APK doubles to 99 MB. `app/build.gradle.kts` also
+   fails the release build if any 64-bit `.so` is not 16 KB page-aligned, and
+   `vision/TfLiteFaceDetector.kt` is a pure-LiteRT BlazeFace fallback for the case where
+   MediaPipe cannot initialise at all.
+
+5. **Face enrolment exists as a user-facing flow.** The doc treats embeddings as
    precomputed inputs. In reality a roster contains names and titles, never face
    vectors. `ui/roster/EnrollScreen.kt` captures three samples and averages them into
    the 128-float embedding the schema calls for, using the same on-device model that
@@ -75,7 +98,7 @@ app/src/main/java/ai/sotto/assistant/
   data/
     model/       Attendee, ConferenceDatabase, session types
     local/       JSON store, encrypted key store, settings
-    remote/      Gemini REST + Live, Cloud STT, Cloud TTS
+    remote/      Gemini REST + Live, optional Cloud STT/TTS
   vision/        detection, embedding, matching, tracking, imaging
   audio/         capture, VAD, playback, Bluetooth, sound cues
   domain/        orchestrator, prompts, pause detection, enrichment
