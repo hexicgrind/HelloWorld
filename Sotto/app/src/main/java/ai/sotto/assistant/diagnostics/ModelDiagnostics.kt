@@ -1,7 +1,9 @@
 package ai.sotto.assistant.diagnostics
 
 import ai.sotto.assistant.BuildConfig
+import ai.sotto.assistant.vision.BlazeFaceAnchors
 import ai.sotto.assistant.vision.MediaPipeFaceDetector
+import ai.sotto.assistant.vision.TfLiteFaceDetector
 import ai.sotto.assistant.vision.TfLiteFaceEmbedder
 import android.content.Context
 import android.os.Build
@@ -46,7 +48,16 @@ object ModelDiagnostics {
         }
     }
 
-    suspend fun run(context: Context, io: CoroutineDispatcher): Report = withContext(io) {
+    /**
+     * @param pipelineSummary what the running app actually ended up with, as opposed to
+     *        what a fresh probe can do. This is the line that answers "is face detection
+     *        working right now".
+     */
+    suspend fun run(
+        context: Context,
+        io: CoroutineDispatcher,
+        pipelineSummary: (() -> String)? = null,
+    ): Report = withContext(io) {
         val checks = mutableListOf<Check>()
 
         checks += buildInfo()
@@ -57,7 +68,19 @@ object ModelDiagnostics {
         checks += assetCheck(context, TfLiteFaceEmbedder.MODEL_ASSET)
         checks += nativeLibraryCheck(context)
         checks += detectorProbe(context)
+        checks += fallbackDetectorProbe(context)
         checks += embedderProbe(context)
+
+        pipelineSummary?.let { summary ->
+            val text = runCatching { summary() }.getOrElse { "could not be determined" }
+            checks += Check(
+                name = "Face pipeline in use",
+                status = if (text.contains("unavailable", ignoreCase = true) ||
+                    text.contains("not started", ignoreCase = true)
+                ) Check.Status.WARN else Check.Status.OK,
+                detail = text,
+            )
+        }
 
         Report(checks)
     }
@@ -158,6 +181,17 @@ object ModelDiagnostics {
     private fun detectorProbe(context: Context): Check = probe("Face detection model") {
         MediaPipeFaceDetector.create(context).use { "MediaPipe face detector created" }
     }
+
+    /**
+     * The LiteRT path. If MediaPipe is broken but this works, face detection still
+     * functions — so this check is what decides whether the feature is actually down.
+     */
+    private fun fallbackDetectorProbe(context: Context): Check =
+        probe("Face detection fallback (LiteRT)") {
+            TfLiteFaceDetector.create(context).use {
+                "BlazeFace on LiteRT created, ${BlazeFaceAnchors.anchors.size} anchors"
+            }
+        }
 
     private fun embedderProbe(context: Context): Check = probe("Face recognition model") {
         TfLiteFaceEmbedder.create(context).use { embedder ->

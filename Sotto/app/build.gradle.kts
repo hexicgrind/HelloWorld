@@ -19,8 +19,8 @@ android {
         // Design Doc 1: "Android SDK: Minimum API level 30. Target API level 35."
         minSdk = 30
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.0.2"
+        versionCode = 4
+        versionName = "1.0.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -69,7 +69,8 @@ android {
             // precisely when they matter most. See -dontobfuscate in proguard-rules.pro.
             isMinifyEnabled = true
             isShrinkResources = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // The non-optimising default. See -dontoptimize in proguard-rules.pro.
+            proguardFiles(getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro")
         }
     }
 

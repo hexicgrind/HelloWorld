@@ -72,7 +72,17 @@ fun DiagnosticsScreen(
 
     LaunchedEffect(runCount) {
         report = null
-        report = ModelDiagnostics.run(container.appContext, container.dispatchers.io)
+        report = ModelDiagnostics.run(
+            context = container.appContext,
+            io = container.dispatchers.io,
+            pipelineSummary = {
+                if (container.facePipeline != null) {
+                    "running — detector: ${container.activeDetector}"
+                } else {
+                    "unavailable — face recognition is off"
+                }
+            },
+        )
     }
 
     Scaffold(

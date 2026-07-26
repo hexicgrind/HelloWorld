@@ -90,7 +90,7 @@ keeps builds fast and makes every collaborator trivially swappable in tests.
 ## Tests
 
 ```bash
-./gradlew test                      # 388 JVM tests
+./gradlew test                      # 418 JVM tests
 ./gradlew connectedAndroidTest      # instrumented, needs a device
 ./gradlew lintRelease               # zero errors
 ```
@@ -108,6 +108,37 @@ The JVM suite covers what the doc's § Testing Strategy asks for and rather more
 
 The instrumented suite loads the real `.tflite` assets and asserts the model's actual
 output shape, determinism and latency.
+
+## Why face detection has two implementations
+
+MediaPipe's Java layer proved to be the least reliable thing in the app. On a real
+device (OnePlus, Android 16, arm64) `com.google.mediapipe.framework.Graph` failed its
+static initialiser with:
+
+```
+IllegalStateException: no caller found on the stack for
+  com.google.common.flogger.FluentLogger
+```
+
+MediaPipe initialises a logger via Flogger's `FluentLogger.forEnclosingClass()`, which
+identifies its caller by walking the call stack. R8's **optimiser** inlines and merges
+frames, the walk finds no caller, and every MediaPipe task dies with
+`NoClassDefFoundError` — while the same TFLite runtime happily ran FaceNet in the same
+process. Keep rules do not help, because nothing is being removed; the stack is simply
+a different shape.
+
+Two changes came out of that:
+
+1. `-dontoptimize`. Shrinking still runs (it is what keeps the APK at 53 MB instead of
+   99 MB); only the optimiser is off, and it is the optimiser that rewrites call stacks.
+2. `vision/TfLiteFaceDetector.kt` — the same BlazeFace model decoded directly on LiteRT,
+   with anchors and NMS implemented in `BlazeFaceAnchors` / `BlazeFaceDecoder`. It is
+   selected automatically whenever MediaPipe won't start, so a single fragile dependency
+   can no longer take face detection down. The decoding maths has 30 unit tests, because
+   a mistake there produces confident boxes in the wrong place rather than an obvious
+   failure.
+
+`Diagnostics` in the app reports which detector is actually in use.
 
 ## 16 KB page alignment
 

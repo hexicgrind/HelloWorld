@@ -16,9 +16,11 @@ import ai.sotto.assistant.data.remote.TextToSpeechClient
 import ai.sotto.assistant.domain.DocumentExtractor
 import ai.sotto.assistant.domain.EnrichmentUseCase
 import ai.sotto.assistant.domain.SessionOrchestrator
+import ai.sotto.assistant.vision.FaceDetectorSource
 import ai.sotto.assistant.vision.FaceMatcher
 import ai.sotto.assistant.vision.FacePipeline
 import ai.sotto.assistant.vision.MediaPipeFaceDetector
+import ai.sotto.assistant.vision.TfLiteFaceDetector
 import ai.sotto.assistant.vision.TfLiteFaceEmbedder
 import android.content.Context
 import kotlinx.coroutines.runBlocking
@@ -90,6 +92,11 @@ class AppContainer(
 
     val faceMatcher: FaceMatcher by lazy { FaceMatcher() }
 
+    /** Which detector implementation actually started, for the diagnostics screen. */
+    @Volatile
+    var activeDetector: String = "not started"
+        private set
+
     /**
      * Null when the models can't be loaded. Callers degrade rather than crash — an
      * install with a damaged asset should still let the user fix their settings.
@@ -97,11 +104,33 @@ class AppContainer(
     val facePipeline: FacePipeline? by lazy {
         runCatching {
             FacePipeline(
-                detector = MediaPipeFaceDetector.create(appContext),
+                detector = createDetector(),
                 embedder = TfLiteFaceEmbedder.create(appContext),
                 matcher = faceMatcher,
             )
         }.onFailure { SLog.e(TAG, "Face models unavailable", it) }.getOrNull()
+    }
+
+    /**
+     * MediaPipe first, our own LiteRT decoder second.
+     *
+     * MediaPipe is what the design doc specifies and it is the better-tuned path, but it
+     * is also the piece that has actually failed on real hardware — its Graph class can
+     * die during static initialisation for reasons that have nothing to do with face
+     * detection. Falling back to the same model decoded on LiteRT means one fragile
+     * dependency can no longer take the whole feature down.
+     */
+    private fun createDetector(): FaceDetectorSource = try {
+        MediaPipeFaceDetector.create(appContext).also {
+            activeDetector = "MediaPipe Tasks"
+            SLog.i(TAG, "Face detection: MediaPipe")
+        }
+    } catch (mediaPipeFailure: Throwable) {
+        SLog.w(TAG, "MediaPipe unavailable; falling back to LiteRT BlazeFace", mediaPipeFailure)
+        TfLiteFaceDetector.create(appContext).also {
+            activeDetector = "LiteRT BlazeFace (MediaPipe unavailable)"
+            SLog.i(TAG, "Face detection: LiteRT fallback")
+        }
     }
 
     // ---- Domain ----------------------------------------------------------------
