@@ -364,4 +364,128 @@ class PromptBuilderTest {
         val roster = (1..500).map { Attendee(id = "$it", name = "Person $it", company = "Co $it") }
         assertThat(PromptBuilder.speechHints(roster).size).isAtMost(200)
     }
+
+    // ---- Fragments and mush -----------------------------------------------------
+    //
+    // A user reported the suggestions being "total nonsense... to the point of rarely
+    // ever even being a complete thought". Three faults fed that: the live socket let
+    // through model turns nobody had asked for, the output-token ceiling cut answers off
+    // mid-sentence, and this parser took the *first* line of whatever arrived — which is
+    // the preamble, not the suggestion. What follows pins down the parser's share.
+
+    @Test
+    fun `a preamble is skipped in favour of the actual suggestion`() {
+        val decision = PromptBuilder.parseDecision(
+            "Here's a good follow-up:\nFOLLOW_UP: Ask what changed after the Berlin launch."
+        )
+        assertThat(decision.text).isEqualTo("Ask what changed after the Berlin launch.")
+        assertThat(decision.kind).isEqualTo(SuggestionKind.FOLLOW_UP)
+    }
+
+    @Test
+    fun `a preamble with no tag still does not get whispered`() {
+        val decision = PromptBuilder.parseDecision(
+            "Okay, based on the conversation:\nAsk how the migration went."
+        )
+        assertThat(decision.text).isEqualTo("Ask how the migration went.")
+    }
+
+    @Test
+    fun `a heading ending in a colon is never the suggestion`() {
+        assertThat(PromptBuilder.parseDecision("Suggestion:").shouldSpeak).isFalse()
+    }
+
+    @Test
+    fun `a tag on its own line takes the sentence beneath it`() {
+        val decision = PromptBuilder.parseDecision("FOLLOW_UP:\nAsk about the Berlin launch.")
+        assertThat(decision.text).isEqualTo("Ask about the Berlin launch.")
+        assertThat(decision.kind).isEqualTo(SuggestionKind.FOLLOW_UP)
+    }
+
+    @Test
+    fun `a markdown-decorated tag is still recognised`() {
+        val decision = PromptBuilder.parseDecision("**CONNECTION:** You both worked at Bletchley.")
+        assertThat(decision.kind).isEqualTo(SuggestionKind.CONNECTION)
+        assertThat(decision.text).isEqualTo("You both worked at Bletchley.")
+    }
+
+    @Test
+    fun `a bulleted suggestion loses its bullet`() {
+        assertThat(PromptBuilder.parseDecision("- Ask about the Berlin launch.").text)
+            .isEqualTo("Ask about the Berlin launch.")
+    }
+
+    @Test
+    fun `a sentence cut off mid-clause is discarded rather than whispered`() {
+        // What a truncated model turn actually looks like.
+        listOf(
+            "FOLLOW_UP: Ask her what she thought about the",
+            "Ask him whether the migration was worth it and",
+            "Mention that you both worked on payments at",
+            "CONNECTION: You two overlapped at Monzo in",
+        ).forEach { fragment ->
+            assertThat(PromptBuilder.parseDecision(fragment).shouldSpeak).isFalse()
+        }
+    }
+
+    @Test
+    fun `a fragment of one or two words is discarded`() {
+        listOf("FOLLOW_UP: Ask", "Berlin", "the launch", "FOLLOW_UP: and then").forEach {
+            assertThat(PromptBuilder.parseDecision(it).shouldSpeak).isFalse()
+        }
+    }
+
+    @Test
+    fun `an unclosed parenthesis means the rest never arrived`() {
+        assertThat(
+            PromptBuilder.parseDecision("Ask about the Berlin launch (the one she mentioned")
+                .shouldSpeak
+        ).isFalse()
+    }
+
+    @Test
+    fun `a complete short sentence still gets through`() {
+        // The fragment guard must not eat legitimate three-word whispers.
+        val decision = PromptBuilder.parseDecision("Ask about Berlin.")
+        assertThat(decision.shouldSpeak).isTrue()
+        assertThat(decision.text).isEqualTo("Ask about Berlin.")
+    }
+
+    @Test
+    fun `a complete sentence without a full stop is fine`() {
+        assertThat(PromptBuilder.parseDecision("Ask how the Berlin launch went").shouldSpeak)
+            .isTrue()
+    }
+
+    @Test
+    fun `a fenced block with a language tag is unwrapped`() {
+        val decision = PromptBuilder.parseDecision("```text\nFOLLOW_UP: Ask about Berlin.\n```")
+        assertThat(decision.text).isEqualTo("Ask about Berlin.")
+    }
+
+    @Test
+    fun `truncation lands on a word boundary`() {
+        val long = "Ask them about the migration " .repeat(20)
+        val text = PromptBuilder.parseDecision(long).text!!
+        assertThat(text).endsWith("…")
+        assertThat(text.length).isAtMost(PromptBuilder.MAX_SUGGESTION_CHARS + 1)
+        // No half-words left dangling before the ellipsis.
+        assertThat(text.removeSuffix("…")).doesNotContain("  ")
+        assertThat(text.removeSuffix("…").last().isLetterOrDigit()).isTrue()
+    }
+
+    @Test
+    fun `completeness is judged on whole words not punctuation alone`() {
+        assertThat(PromptBuilder.isCompleteThought("Ask about the Berlin launch.")).isTrue()
+        assertThat(PromptBuilder.isCompleteThought("Ask about the")).isFalse()
+        assertThat(PromptBuilder.isCompleteThought("Ask about the Berlin launch, and")).isFalse()
+        assertThat(PromptBuilder.isCompleteThought("Two words")).isFalse()
+    }
+
+    @Test
+    fun `the system instruction shows the model what a valid reply looks like`() {
+        val text = PromptBuilder.systemInstruction(SottoSettings(), hasDatabase = true)
+        assertThat(text).contains("FOLLOW_UP: Ask what changed after the Berlin launch.")
+        assertThat(text).contains("Finish the sentence")
+    }
 }

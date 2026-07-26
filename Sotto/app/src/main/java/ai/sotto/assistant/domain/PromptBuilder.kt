@@ -59,12 +59,24 @@ object PromptBuilder {
         appendLine()
 
         appendLine("## Output format")
-        appendLine("Reply with either exactly:")
+        appendLine("Your entire reply is either exactly:")
         appendLine("  $PASS_TOKEN")
-        appendLine("or a single line:")
+        appendLine("or exactly one line in this shape:")
         appendLine("  <KIND>: <the sentence to whisper>")
         appendLine("where <KIND> is FOLLOW_UP, CONNECTION or TOPIC_SHIFT.")
-        appendLine("No quotes, no markdown, no explanation.")
+        appendLine()
+        appendLine("Worked examples of a valid reply:")
+        appendLine("  FOLLOW_UP: Ask what changed after the Berlin launch.")
+        appendLine("  CONNECTION: You both worked on payments at Monzo.")
+        appendLine("  TOPIC_SHIFT: Bring up her paper on retrieval benchmarks.")
+        appendLine("  $PASS_TOKEN")
+        appendLine()
+        // The parser rejects fragments outright, so a half-sentence costs the user the
+        // whole turn. Say so, rather than relying on the model to infer it.
+        appendLine("Hard rules:")
+        appendLine("- Finish the sentence. A cut-off half-sentence is discarded entirely.")
+        appendLine("- No preamble, no heading, no reasoning, no quotes, no markdown.")
+        appendLine("- Never output more than that one line.")
 
         if (!hasDatabase) {
             appendLine()
@@ -180,37 +192,110 @@ object PromptBuilder {
      * that smells like a refusal or a meta-comment becomes a PASS.
      */
     fun parseDecision(raw: String): Decision {
-        var text = raw.trim()
+        val text = stripWrapping(raw)
         if (text.isEmpty()) return Decision.PASS
-
-        text = text.trim('`', ' ', '\n', '\r')
-        if (text.startsWith("json", ignoreCase = true)) text = text.removePrefix("json").trim()
-
-        // A bare PASS, or a leading PASS on its own line.
-        val firstLine = text.lineSequence().firstOrNull()?.trim().orEmpty()
-        if (firstLine.equals(PASS_TOKEN, ignoreCase = true)) return Decision.PASS
         if (text.equals(PASS_TOKEN, ignoreCase = true)) return Decision.PASS
 
-        val kindMatch = KIND_REGEX.find(text)
-        val kind = kindMatch?.groupValues?.getOrNull(1)?.uppercase()?.let { label ->
-            when (label) {
-                "FOLLOW_UP", "FOLLOWUP", "FOLLOW-UP" -> SuggestionKind.FOLLOW_UP
-                "CONNECTION" -> SuggestionKind.CONNECTION
-                "TOPIC_SHIFT", "TOPICSHIFT", "TOPIC-SHIFT" -> SuggestionKind.TOPIC_SHIFT
-                else -> null
-            }
+        val lines = text.lineSequence()
+            .map { it.trim().trim('`').trim() }
+            .filter { it.isNotBlank() }
+            .toList()
+        if (lines.isEmpty()) return Decision.PASS
+        if (lines.first().equals(PASS_TOKEN, ignoreCase = true)) return Decision.PASS
+
+        // Prefer a line that actually carries the KIND marker. Searching per line, not
+        // once against the whole blob anchored at position zero, is what makes a
+        // preamble survivable: a model that opens with "Here's a thought:" used to have
+        // that preamble whispered into the user's ear as if it were the suggestion.
+        var kind: SuggestionKind? = null
+        var body: String? = null
+
+        for ((index, line) in lines.withIndex()) {
+            val match = KIND_REGEX.find(line) ?: continue
+            kind = kindOf(match.groupValues.getOrNull(1))
+            val remainder = line.removeRange(match.range).trim()
+            body = remainder.ifBlank { lines.getOrNull(index + 1)?.trim().orEmpty() }
+            break
         }
 
-        var body = if (kindMatch != null) text.removeRange(kindMatch.range).trim() else text
-        body = body.trim().trim('"', '“', '”', ' ').trim()
-        body = body.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+        // No marker at all: take the first line that reads like something a person could
+        // say out loud, rather than blindly taking line one.
+        if (body.isNullOrBlank()) body = lines.firstOrNull(::looksLikeWhisper)
 
-        if (body.isEmpty()) return Decision.PASS
-        if (body.equals(PASS_TOKEN, ignoreCase = true)) return Decision.PASS
-        if (REFUSAL_REGEX.containsMatchIn(body)) return Decision.PASS
-        if (body.length > MAX_SUGGESTION_CHARS) body = body.take(MAX_SUGGESTION_CHARS).trimEnd() + "…"
+        var cleaned = clean(body.orEmpty())
+        if (cleaned.isEmpty()) return Decision.PASS
+        if (cleaned.equals(PASS_TOKEN, ignoreCase = true)) return Decision.PASS
+        if (REFUSAL_REGEX.containsMatchIn(cleaned)) return Decision.PASS
 
-        return Decision(kind ?: SuggestionKind.FOLLOW_UP, body)
+        // A fragment is worse than silence. Whispering "and then the" into someone's ear
+        // mid-conversation is actively harmful, so anything that isn't a whole thought
+        // becomes a PASS.
+        if (!isCompleteThought(cleaned)) return Decision.PASS
+
+        if (cleaned.length > MAX_SUGGESTION_CHARS) cleaned = truncateAtWord(cleaned)
+
+        return Decision(kind ?: SuggestionKind.FOLLOW_UP, cleaned)
+    }
+
+    private fun stripWrapping(raw: String): String {
+        var text = raw.trim()
+        // ```lang\n ... \n```
+        if (text.startsWith("```")) {
+            text = text.removePrefix("```").substringBeforeLast("```")
+            text = text.substringAfter('\n', text)
+        }
+        text = text.trim('`', ' ', '\n', '\r')
+        if (text.startsWith("json", ignoreCase = true)) text = text.removePrefix("json").trim()
+        return text
+    }
+
+    private fun kindOf(label: String?): SuggestionKind? = when (label?.uppercase()?.replace(" ", "_")) {
+        "FOLLOW_UP", "FOLLOWUP", "FOLLOW-UP" -> SuggestionKind.FOLLOW_UP
+        "CONNECTION" -> SuggestionKind.CONNECTION
+        "TOPIC_SHIFT", "TOPICSHIFT", "TOPIC-SHIFT" -> SuggestionKind.TOPIC_SHIFT
+        else -> null
+    }
+
+    /** Filters out headings, preambles, bullets-of-nothing and stray markdown. */
+    private fun looksLikeWhisper(line: String): Boolean {
+        val candidate = clean(line)
+        if (candidate.length < MIN_SUGGESTION_CHARS) return false
+        if (candidate.equals(PASS_TOKEN, ignoreCase = true)) return false
+        // "Here's a suggestion:" and friends — a label for what follows, not the thing.
+        if (candidate.endsWith(":")) return false
+        if (PREAMBLE_REGEX.containsMatchIn(candidate)) return false
+        return candidate.any { it.isLetter() }
+    }
+
+    private fun clean(line: String): String = line
+        .trim()
+        .removePrefix("- ").removePrefix("* ").removePrefix("• ")
+        .trim()
+        .trim('"', '“', '”', '\'', '‘', '’', '*', '_', ' ')
+        .trim()
+
+    /**
+     * Whether this reads as a finished sentence rather than a truncated fragment.
+     *
+     * Model turns get cut off — by an output-token ceiling, by a dropped socket frame,
+     * by the turn being interrupted. What arrives then is the *start* of a sentence, and
+     * it used to be spoken as though it were the whole suggestion.
+     */
+    internal fun isCompleteThought(text: String): Boolean {
+        val words = text.split(WHITESPACE).filter { it.isNotBlank() }
+        if (words.size < MIN_SUGGESTION_WORDS) return false
+        // Ends mid-clause: a conjunction or article as the final word is a giveaway.
+        if (DANGLING_REGEX.containsMatchIn(text)) return false
+        // An unbalanced opening bracket means the closing half never arrived.
+        if (text.count { it == '(' } != text.count { it == ')' }) return false
+        return true
+    }
+
+    private fun truncateAtWord(text: String): String {
+        val hard = text.take(MAX_SUGGESTION_CHARS)
+        val lastSpace = hard.lastIndexOf(' ')
+        val cut = if (lastSpace > MAX_SUGGESTION_CHARS / 2) hard.take(lastSpace) else hard
+        return cut.trimEnd().trimEnd(',', ';', ':', '-', '–') + "…"
     }
 
     /**
@@ -256,13 +341,38 @@ object PromptBuilder {
     const val MAX_TRANSCRIPT_LINES = 14
     const val MAX_RECENT_SUGGESTIONS = 5
     const val MAX_SUGGESTION_CHARS = 180
+    const val MIN_SUGGESTION_CHARS = 8
+
+    /** "Ask about Berlin." is three words; anything shorter isn't a usable line. */
+    const val MIN_SUGGESTION_WORDS = 3
+
+    private val WHITESPACE = Regex("\\s+")
 
     private val KIND_REGEX =
-        Regex("^\\s*\\[?(FOLLOW[_ -]?UP|CONNECTION|TOPIC[_ -]?SHIFT)]?\\s*[:\\-–]\\s*",
+        Regex("^\\s*[-*•]?\\s*\\**\\[?(FOLLOW[_ -]?UP|CONNECTION|TOPIC[_ -]?SHIFT)]?\\**\\s*[:\\-–]\\s*",
             RegexOption.IGNORE_CASE)
 
     private val REFUSAL_REGEX = Regex(
         "^(i\\s|as an ai|i'm sorry|sorry,|i cannot|i can't|unable to)",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /** Meta-commentary the model wraps around its actual answer. */
+    private val PREAMBLE_REGEX = Regex(
+        "^(here('s| is)|okay|ok\\b|sure\\b|certainly|based on|given (that|the)|" +
+            "(a |one )?(good |possible |suggested )?(suggestion|option|idea|whisper|response)\\b|" +
+            "output|answer|reply|kind|format)\\b",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /**
+     * A trailing word that can only be the middle of a sentence. If the turn ends here,
+     * the rest of it never arrived.
+     */
+    private val DANGLING_REGEX = Regex(
+        "\\b(a|an|the|and|or|but|so|to|of|in|on|at|for|with|that|which|who|because|" +
+            "about|from|as|is|are|was|were|their|your|his|her|its|our|my|this|these|" +
+            "those|if|when|while|how|what|it's|they're)\\s*[,;:\\-–—]?\\s*$",
         RegexOption.IGNORE_CASE,
     )
 }

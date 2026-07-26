@@ -111,6 +111,9 @@ class SessionOrchestrator(
     @Volatile
     private var currentTargetId: String? = null
 
+    /** When each person was last announced, for the re-recognition cooldown. */
+    private val announcedAtMs = mutableMapOf<String, Long>()
+
     @Volatile
     private var liveReady = false
 
@@ -208,6 +211,7 @@ class SessionOrchestrator(
         vad.reset()
         synchronized(utteranceBuffer) { utteranceBuffer.reset() }
         currentTargetId = null
+        announcedAtMs.clear()
         liveReady = false
         reconnectAttempts = 0
         speaking = false
@@ -341,15 +345,43 @@ class SessionOrchestrator(
             .launchIn(this)
     }
 
+    /**
+     * True the first time someone is recognised, and again only once the cooldown has
+     * elapsed.
+     *
+     * A face leaves the frame the moment its owner turns their head, and comes back a
+     * second later. Without this, every glance re-ran the full acquisition — chime,
+     * identity whisper, the lot — which is maddening when you are three minutes into a
+     * conversation with the same person. The context injection still happens every time,
+     * because that costs nothing and keeps the model correct; it is the *announcement*
+     * that gets suppressed.
+     */
+    private fun shouldAnnounce(attendeeId: String, now: Long): Boolean {
+        val cooldownMs = settings.recognitionCooldownSec.coerceAtLeast(0) * 1_000L
+        val last = announcedAtMs[attendeeId]
+        if (last != null && cooldownMs > 0L && now - last < cooldownMs) return false
+        announcedAtMs[attendeeId] = now
+        // Keep the map from growing without bound over a long session.
+        if (announcedAtMs.size > MAX_TRACKED_ANNOUNCEMENTS) {
+            announcedAtMs.entries
+                .sortedBy { it.value }
+                .take(announcedAtMs.size - MAX_TRACKED_ANNOUNCEMENTS)
+                .forEach { announcedAtMs.remove(it.key) }
+        }
+        return true
+    }
+
     private suspend fun onTargetAcquired(attendee: Attendee) {
-        SLog.i(TAG, "New target: ${attendee.name}")
-        soundCues.signal(SoundCues.Cue.MATCH)
+        val announce = shouldAnnounce(attendee.id, clock())
+        SLog.i(TAG, "Target: ${attendee.name}${if (announce) "" else " (within cooldown)"}")
+
+        if (announce) soundCues.signal(SoundCues.Cue.MATCH)
 
         if (liveReady) {
             // § Runtime Flow: "The current target's information is injected into
             // Gemini Live's context."
             liveClient.updateContext(PromptBuilder.targetContext(attendee))
-        } else {
+        } else if (announce) {
             // § Error Handling: "If Gemini Live API is unreachable, the app falls back
             // to simple TTS of the matched attendee's name and title."
             emitSuggestion(
@@ -666,6 +698,7 @@ class SessionOrchestrator(
         const val DECISION_TICK_MS = 500L
         const val MAX_TRANSCRIPT_LINES = 60
         const val MAX_SUGGESTIONS = 40
+        const val MAX_TRACKED_ANNOUNCEMENTS = 500
         const val WHISPER_DISPLAY_LINGER_MS = 6_000L
 
         /** 30 seconds of audio; a single utterance never legitimately exceeds this. */

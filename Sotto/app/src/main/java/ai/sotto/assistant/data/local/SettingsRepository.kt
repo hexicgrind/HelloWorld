@@ -43,6 +43,13 @@ data class SottoSettings(
     val matchThreshold: Float = DEFAULT_MATCH_THRESHOLD,
     /** Design Doc 1: face "tracked for one second or more" before embedding. */
     val trackDwellMs: Int = DEFAULT_TRACK_DWELL_MS,
+    /**
+     * How long after recognising someone before Sotto will announce them again.
+     *
+     * Without this, glancing away and back re-triggers the whole acquisition — chime,
+     * identity whisper, the lot — every few seconds. Zero disables the cooldown.
+     */
+    val recognitionCooldownSec: Int = DEFAULT_RECOGNITION_COOLDOWN_SEC,
     /** Design Doc 1: "Every five to ten seconds, Gemini analyzes the transcript". */
     val suggestionIntervalSec: Int = DEFAULT_SUGGESTION_INTERVAL_SEC,
     /** Minimum quiet time that counts as a natural pause. */
@@ -72,6 +79,9 @@ data class SottoSettings(
     companion object {
         const val DEFAULT_MATCH_THRESHOLD = 0.70f
         const val DEFAULT_TRACK_DWELL_MS = 1_000
+        /** Four minutes: long enough to cover a whole conversation with one person. */
+        const val DEFAULT_RECOGNITION_COOLDOWN_SEC = 240
+        const val MAX_RECOGNITION_COOLDOWN_SEC = 1_800
         const val DEFAULT_SUGGESTION_INTERVAL_SEC = 7
         const val DEFAULT_PAUSE_THRESHOLD_MS = 1_200
         const val DEFAULT_WHISPER_VOLUME = 0.85f
@@ -133,6 +143,8 @@ class SettingsRepository(private val context: Context) {
     private fun Preferences.toSettings() = SottoSettings(
         matchThreshold = this[Keys.matchThreshold] ?: SottoSettings.DEFAULT_MATCH_THRESHOLD,
         trackDwellMs = this[Keys.trackDwellMs] ?: SottoSettings.DEFAULT_TRACK_DWELL_MS,
+        recognitionCooldownSec = this[Keys.recognitionCooldown]
+            ?: SottoSettings.DEFAULT_RECOGNITION_COOLDOWN_SEC,
         suggestionIntervalSec = this[Keys.suggestionInterval]
             ?: SottoSettings.DEFAULT_SUGGESTION_INTERVAL_SEC,
         pauseThresholdMs = this[Keys.pauseThreshold] ?: SottoSettings.DEFAULT_PAUSE_THRESHOLD_MS,
@@ -162,6 +174,8 @@ class SettingsRepository(private val context: Context) {
     private fun androidx.datastore.preferences.core.MutablePreferences.writeSettings(s: SottoSettings) {
         this[Keys.matchThreshold] = s.matchThreshold.coerceIn(SottoSettings.MATCH_THRESHOLD_RANGE)
         this[Keys.trackDwellMs] = s.trackDwellMs.coerceIn(SottoSettings.TRACK_DWELL_RANGE)
+        this[Keys.recognitionCooldown] =
+            s.recognitionCooldownSec.coerceIn(0, SottoSettings.MAX_RECOGNITION_COOLDOWN_SEC)
         this[Keys.suggestionInterval] =
             s.suggestionIntervalSec.coerceIn(SottoSettings.SUGGESTION_INTERVAL_RANGE)
         this[Keys.pauseThreshold] = s.pauseThresholdMs.coerceIn(300, 5_000)
@@ -189,6 +203,7 @@ class SettingsRepository(private val context: Context) {
     private object Keys {
         val matchThreshold = floatPreferencesKey("match_threshold")
         val trackDwellMs = intPreferencesKey("track_dwell_ms")
+        val recognitionCooldown = intPreferencesKey("recognition_cooldown_sec")
         val suggestionInterval = intPreferencesKey("suggestion_interval_sec")
         val pauseThreshold = intPreferencesKey("pause_threshold_ms")
         val allowWebSearch = booleanPreferencesKey("allow_web_search")

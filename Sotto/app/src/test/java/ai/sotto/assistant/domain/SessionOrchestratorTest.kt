@@ -521,6 +521,141 @@ class SessionOrchestratorTest {
         io.mockk.verify { deviceTts.stop() }
     }
 
+
+    // ---- Re-recognition cooldown -----------------------------------------------------
+    //
+    // People turn their heads. Every glance away and back used to count as a fresh
+    // recognition — chime, identity whisper, the lot — which is unbearable three minutes
+    // into a conversation with the same person.
+
+    /** Drops the face out of frame and brings it back. */
+    private fun SessionOrchestrator.glanceAway() {
+        detector.faces = emptyList()
+        val end = now + 600L
+        while (now <= end) {
+            onCameraFrame(frame())
+            now += 33L
+        }
+        detector.faces = listOf(visibleFace())
+    }
+
+    @Test
+    fun `the same person is only announced once inside the cooldown`() {
+        runBlocking { repository.save(ConferenceDatabase(attendees = listOf(ada))) }
+        val session = orchestrator(dispatcher)
+        session.start()
+
+        session.holdFaceInFrame()
+        session.glanceAway()
+        now += 30_000L
+        session.holdFaceInFrame()
+
+        io.mockk.verify(exactly = 1) { cues.signal(SoundCues.Cue.MATCH) }
+    }
+
+    @Test
+    fun `the person is announced again once the cooldown expires`() {
+        runBlocking { repository.save(ConferenceDatabase(attendees = listOf(ada))) }
+        val session = orchestrator(dispatcher)
+        session.start()
+
+        session.holdFaceInFrame()
+        session.glanceAway()
+        // Default cooldown is four minutes.
+        now += SottoSettings.DEFAULT_RECOGNITION_COOLDOWN_SEC * 1_000L + 1_000L
+        session.holdFaceInFrame()
+
+        io.mockk.verify(exactly = 2) { cues.signal(SoundCues.Cue.MATCH) }
+    }
+
+    @Test
+    fun `a cooldown of zero announces every time`() {
+        settingsOf(SottoSettings(recognitionCooldownSec = 0))
+        runBlocking { repository.save(ConferenceDatabase(attendees = listOf(ada))) }
+        val session = orchestrator(dispatcher)
+        session.start()
+
+        session.holdFaceInFrame()
+        session.glanceAway()
+        now += 2_000L
+        session.holdFaceInFrame()
+
+        io.mockk.verify(exactly = 2) { cues.signal(SoundCues.Cue.MATCH) }
+    }
+
+    @Test
+    fun `a custom cooldown is honoured`() {
+        settingsOf(SottoSettings(recognitionCooldownSec = 600))
+        runBlocking { repository.save(ConferenceDatabase(attendees = listOf(ada))) }
+        val session = orchestrator(dispatcher)
+        session.start()
+
+        session.holdFaceInFrame()
+        session.glanceAway()
+        // Past the four-minute default, but well inside the ten minutes asked for.
+        now += 300_000L
+        session.holdFaceInFrame()
+
+        io.mockk.verify(exactly = 1) { cues.signal(SoundCues.Cue.MATCH) }
+    }
+
+    @Test
+    fun `a different person is announced regardless of someone else's cooldown`() {
+        val graceEmbedding = embedding(11)
+        val grace = Attendee(
+            id = "grace",
+            name = "Grace Hopper",
+            embedding = graceEmbedding.toList(),
+        )
+        runBlocking { repository.save(ConferenceDatabase(attendees = listOf(ada, grace))) }
+        val session = orchestrator(dispatcher)
+        session.start()
+
+        session.holdFaceInFrame()
+        session.glanceAway()
+        embedder.embedding = graceEmbedding
+        now += 5_000L
+        session.holdFaceInFrame()
+
+        io.mockk.verify(exactly = 2) { cues.signal(SoundCues.Cue.MATCH) }
+    }
+
+    @Test
+    fun `context is still injected on every re-recognition`() {
+        // Suppressing the announcement must not leave the model thinking nobody is there.
+        runBlocking { repository.save(ConferenceDatabase(attendees = listOf(ada))) }
+        every { live.isReady } returns true
+        val session = orchestrator(dispatcher)
+        session.start()
+        liveEvents.tryEmit(GeminiLiveClient.Event.Ready)
+
+        session.holdFaceInFrame()
+        session.glanceAway()
+        now += 10_000L
+        session.holdFaceInFrame()
+
+        io.mockk.verify(atLeast = 2) {
+            live.updateContext(match { it.contains("Ada Lovelace") })
+        }
+        io.mockk.verify(exactly = 1) { cues.signal(SoundCues.Cue.MATCH) }
+    }
+
+    @Test
+    fun `the cooldown resets when the session is restarted`() {
+        runBlocking { repository.save(ConferenceDatabase(attendees = listOf(ada))) }
+        val session = orchestrator(dispatcher)
+
+        session.start()
+        session.holdFaceInFrame()
+        session.stop()
+
+        session.start()
+        now += 1_000L
+        session.holdFaceInFrame()
+
+        io.mockk.verify(exactly = 2) { cues.signal(SoundCues.Cue.MATCH) }
+    }
+
     // ---- Housekeeping --------------------------------------------------------------------
 
     @Test

@@ -67,7 +67,51 @@ class GeminiLiveClient(
     private var socket: WebSocket? = null
     private val open = AtomicBoolean(false)
     private val setupComplete = AtomicBoolean(false)
-    private val textBuffer = StringBuilder()
+    private val turns = TurnAssembler()
+
+    /**
+     * Reassembles a streamed model turn, and remembers whether we asked for it.
+     *
+     * The live session streams microphone audio, so its automatic voice-activity
+     * detection generates replies on its own every time someone stops speaking. Those
+     * are answers aimed at the conversation, not whispers for the user's ear. They used
+     * to be spoken verbatim, and worse, a decision request arriving while one was still
+     * streaming would clear the buffer underneath it — so what finally got spoken was
+     * the tail end of one turn glued to nothing. Between them, those two faults are why
+     * suggestions read as half-formed nonsense.
+     */
+    internal class TurnAssembler {
+        private val buffer = StringBuilder()
+        private var requested = false
+
+        /** Marks the next completed turn as one the app asked for. */
+        @Synchronized
+        fun expectTurn() {
+            buffer.setLength(0)
+            requested = true
+        }
+
+        @Synchronized
+        fun reset() {
+            buffer.setLength(0)
+            requested = false
+        }
+
+        @Synchronized
+        fun append(text: String) {
+            buffer.append(text)
+        }
+
+        /** The finished turn, or null if it was unrequested or empty. */
+        @Synchronized
+        fun finish(): String? {
+            val text = buffer.toString().trim()
+            buffer.setLength(0)
+            val wanted = requested
+            requested = false
+            return if (wanted && text.isNotEmpty()) text else null
+        }
+    }
 
     enum class Status { IDLE, CONNECTING, READY, RECONNECTING, FAILED, CLOSED }
 
@@ -132,7 +176,7 @@ class GeminiLiveClient(
         pendingAllowSearch = allowWebSearch
         _status.value = Status.CONNECTING
         setupComplete.set(false)
-        textBuffer.setLength(0)
+        turns.reset()
 
         val request = Request.Builder()
             .url("$baseUrl?key=$apiKey")
@@ -190,7 +234,7 @@ class GeminiLiveClient(
      */
     fun requestDecision(prompt: String) {
         if (!isReady) return
-        textBuffer.setLength(0)
+        turns.expectTurn()
         val frame = buildJsonObject {
             putJsonObject("clientContent") {
                 putJsonArray("turns") {
@@ -243,6 +287,11 @@ class GeminiLiveClient(
                 putJsonArray("responseModalities") { add(JsonPrimitive("TEXT")) }
                 put("temperature", 0.75)
                 put("topP", 0.95)
+                // Generous, despite the answer being one sentence. Current Gemini models
+                // spend output tokens on internal reasoning before they emit anything,
+                // and that comes out of the same budget — a tight cap doesn't produce a
+                // short answer, it produces an answer that stops mid-sentence. Short
+                // replies still only bill for what they use.
                 put("maxOutputTokens", MAX_OUTPUT_TOKENS)
             }
             putJsonObject("systemInstruction") {
@@ -329,7 +378,7 @@ class GeminiLiveClient(
             ?.let { _events.tryEmit(Event.InputTranscript(it)) }
 
         if (content["interrupted"]?.jsonPrimitive?.contentOrNull == "true") {
-            textBuffer.setLength(0)
+            turns.reset()
             return
         }
 
@@ -337,26 +386,27 @@ class GeminiLiveClient(
             ?.get("parts")?.let { it as? JsonArray }
             ?.forEach { part ->
                 (part as? JsonObject)?.get("text")?.jsonPrimitive?.contentOrNull
-                    ?.let { textBuffer.append(it) }
+                    ?.let { turns.append(it) }
             }
 
-        val turnComplete = content["turnComplete"]?.jsonPrimitive?.contentOrNull == "true"
-        if (turnComplete) {
-            val text = textBuffer.toString().trim()
-            textBuffer.setLength(0)
-            val used = sawWebSearch
-            sawWebSearch = false
-            if (text.isNotEmpty()) {
-                _events.tryEmit(Event.Turn(text, used))
-            }
+        if (content["turnComplete"]?.jsonPrimitive?.contentOrNull != "true") return
+
+        val completed = turns.finish()
+        if (completed == null) {
+            SLog.d(TAG) { "Ignoring a model turn nobody asked for" }
+            return
         }
+
+        val used = sawWebSearch
+        sawWebSearch = false
+        _events.tryEmit(Event.Turn(completed, used))
     }
 
     companion object {
         private const val TAG = "GeminiLive"
         const val SERVICE = "Gemini Live"
         const val NORMAL_CLOSURE = 1000
-        const val MAX_OUTPUT_TOKENS = 220
+        const val MAX_OUTPUT_TOKENS = 1_024
 
         const val DEFAULT_BASE_URL =
             "wss://generativelanguage.googleapis.com/ws/" +

@@ -88,11 +88,15 @@ class GeminiLiveClientTest {
     }
 
     @Test
-    fun `output length is capped so whispers stay short`() {
+    fun `the output budget leaves room for the model to think before answering`() {
+        // This used to assert a tight cap on the theory that a short answer needs few
+        // tokens. Current Gemini models spend output tokens on internal reasoning first,
+        // out of the same budget — so a tight cap produced answers that stopped
+        // mid-sentence, which is exactly what a user reported hearing.
         val maxTokens = setup()["generationConfig"]!!.jsonObject["maxOutputTokens"]!!
             .jsonPrimitive.content.toInt()
         assertThat(maxTokens).isEqualTo(GeminiLiveClient.MAX_OUTPUT_TOKENS)
-        assertThat(maxTokens).isLessThan(500)
+        assertThat(maxTokens).isAtLeast(512)
     }
 
     // ---- Endpoint ------------------------------------------------------------------
@@ -142,5 +146,97 @@ class GeminiLiveClientTest {
         every { keyStore.get(ApiService.GEMINI) } returns null
         client.connect("models/x", "the instruction", allowWebSearch = false)
         assertThat(client.systemPrompt).isEqualTo("the instruction")
+    }
+
+    // ---- Turn assembly -------------------------------------------------------------
+    //
+    // A user reported suggestions that were "total nonsense... rarely ever even a
+    // complete thought". Streaming microphone audio into the live session means its
+    // automatic voice-activity detection replies on its own whenever someone stops
+    // talking. Those replies were emitted as whispers, and a real decision request
+    // arriving mid-stream used to wipe the buffer under an in-flight turn.
+
+    @Test
+    fun `a requested turn is delivered`() {
+        val turns = GeminiLiveClient.TurnAssembler()
+        turns.expectTurn()
+        turns.append("FOLLOW_UP: Ask about Berlin.")
+
+        assertThat(turns.finish()).isEqualTo("FOLLOW_UP: Ask about Berlin.")
+    }
+
+    @Test
+    fun `streamed fragments are reassembled into one turn`() {
+        val turns = GeminiLiveClient.TurnAssembler()
+        turns.expectTurn()
+        turns.append("FOLLOW_UP: Ask how ")
+        turns.append("the Berlin launch ")
+        turns.append("went.")
+
+        assertThat(turns.finish()).isEqualTo("FOLLOW_UP: Ask how the Berlin launch went.")
+    }
+
+    @Test
+    fun `a turn nobody asked for is dropped`() {
+        // The live model answering the conversation of its own accord.
+        val turns = GeminiLiveClient.TurnAssembler()
+        turns.append("Oh interesting, tell me more about that.")
+
+        assertThat(turns.finish()).isNull()
+    }
+
+    @Test
+    fun `an unrequested turn does not poison the next requested one`() {
+        val turns = GeminiLiveClient.TurnAssembler()
+        turns.append("spontaneous chatter")
+        assertThat(turns.finish()).isNull()
+
+        turns.expectTurn()
+        turns.append("FOLLOW_UP: Ask about Berlin.")
+        assertThat(turns.finish()).isEqualTo("FOLLOW_UP: Ask about Berlin.")
+    }
+
+    @Test
+    fun `requesting a decision discards whatever was mid-flight`() {
+        // Otherwise the tail of an abandoned turn gets glued onto the new one.
+        val turns = GeminiLiveClient.TurnAssembler()
+        turns.append("half of something unrelated")
+
+        turns.expectTurn()
+        turns.append("FOLLOW_UP: Ask about Berlin.")
+
+        assertThat(turns.finish()).isEqualTo("FOLLOW_UP: Ask about Berlin.")
+    }
+
+    @Test
+    fun `each request only satisfies one turn`() {
+        val turns = GeminiLiveClient.TurnAssembler()
+        turns.expectTurn()
+        turns.append("FOLLOW_UP: Ask about Berlin.")
+        assertThat(turns.finish()).isNotNull()
+
+        turns.append("a second, unrequested turn")
+        assertThat(turns.finish()).isNull()
+    }
+
+    @Test
+    fun `an interruption clears the buffer and the request`() {
+        val turns = GeminiLiveClient.TurnAssembler()
+        turns.expectTurn()
+        turns.append("FOLLOW_UP: Ask abo")
+
+        turns.reset()
+
+        turns.append("leftover")
+        assertThat(turns.finish()).isNull()
+    }
+
+    @Test
+    fun `an empty requested turn yields nothing rather than an empty whisper`() {
+        val turns = GeminiLiveClient.TurnAssembler()
+        turns.expectTurn()
+        turns.append("   \n  ")
+
+        assertThat(turns.finish()).isNull()
     }
 }

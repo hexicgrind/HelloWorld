@@ -117,9 +117,10 @@ fun SettingsScreen(
                         "phone's hardware keystore and never leave the device except to Google.",
                 ) {
                     Notice(
-                        text = "One key usually covers everything.",
-                        detail = "Create a key in Google AI Studio, then enable Speech-to-Text " +
-                            "and Text-to-Speech on the same Google Cloud project.",
+                        text = "One key from Google AI Studio is all you need.",
+                        detail = "Nothing to enable in the Google Cloud console. Sotto speaks " +
+                            "with your phone's own voice and transcribes through Gemini, so " +
+                            "the two Cloud APIs that refuse API keys are never used.",
                         tone = NoticeTone.INFO,
                         actionLabel = "Open Google AI Studio",
                         onAction = {
@@ -401,6 +402,32 @@ fun SettingsScreen(
                         onValueChange = { v ->
                             viewModel.update { it.copy(trackDwellMs = v.roundToInt()) }
                         },
+                    )
+                    Spacer(Modifier.height(18.dp))
+                    SliderRow(
+                        label = "Don't re-announce the same person for",
+                        value = state.settings.recognitionCooldownSec.toFloat(),
+                        valueRange = 0f..SottoSettings.MAX_RECOGNITION_COOLDOWN_SEC.toFloat(),
+                        steps = 29,
+                        display = { seconds ->
+                            val s = seconds.roundToInt()
+                            when {
+                                s == 0 -> "Off — chime every time they're seen again"
+                                s < 60 -> "$s seconds"
+                                s % 60 == 0 -> "${s / 60} minutes"
+                                else -> "${s / 60} min ${s % 60} sec"
+                            }
+                        },
+                        onValueChange = { v ->
+                            viewModel.update { it.copy(recognitionCooldownSec = v.roundToInt()) }
+                        },
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "People turn their heads. Without this, every glance away and back " +
+                            "counts as a fresh recognition and you get the chime again.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
