@@ -110,4 +110,81 @@ class AppErrorTest {
     fun `a blank detail falls back to something useful`() {
         assertThat(AppError.ServiceFailure("Gemini", "   ").recovery).isNotEmpty()
     }
+
+    // ---- ModelUnavailable -------------------------------------------------------
+    //
+    // These exist because the first version of this error told users to reinstall no
+    // matter what went wrong. When the real cause was a native library that could not
+    // load on their device at all, that advice was worse than useless — it sent them
+    // round a loop that could never fix anything.
+
+    @Test
+    fun `a native library failure does not tell the user to reinstall`() {
+        val error = AppError.ModelUnavailable(
+            "face detection",
+            UnsatisfiedLinkError("dlopen failed: library is not 16 KB aligned"),
+        )
+        assertThat(error.recovery!!.lowercase()).doesNotContain("reinstalling this one will help")
+        assertThat(error.recovery!!.lowercase()).contains("newer build")
+        assertThat(error.recovery!!.lowercase()).contains("won't help")
+    }
+
+    @Test
+    fun `a native library failure surfaces the underlying message`() {
+        val error = AppError.ModelUnavailable(
+            "face detection",
+            UnsatisfiedLinkError("dlopen failed: not 16 KB aligned"),
+        )
+        assertThat(error.recovery).contains("not 16 KB aligned")
+    }
+
+    @Test
+    fun `a wrapped native library failure is still recognised`() {
+        val wrapped = RuntimeException("init failed", UnsatisfiedLinkError("dlopen failed"))
+        assertThat(AppError.ModelUnavailable("face detection", wrapped).recovery!!.lowercase())
+            .contains("newer build")
+    }
+
+    @Test
+    fun `a genuinely missing file does advise reinstalling`() {
+        val error = AppError.ModelUnavailable(
+            "face recognition",
+            java.io.FileNotFoundException("facenet.tflite"),
+        )
+        assertThat(error.recovery!!.lowercase()).contains("reinstalling")
+    }
+
+    @Test
+    fun `the message names which model failed`() {
+        assertThat(AppError.ModelUnavailable("face detection").userMessage)
+            .contains("face detection")
+        assertThat(AppError.ModelUnavailable("face recognition").userMessage)
+            .contains("face recognition")
+    }
+
+    @Test
+    fun `an unknown cause says so instead of inventing advice`() {
+        val recovery = AppError.ModelUnavailable().recovery!!
+        assertThat(recovery).isNotEmpty()
+        assertThat(recovery.lowercase()).contains("no further detail")
+    }
+
+    @Test
+    fun `a long underlying message is truncated to fit on screen`() {
+        val error = AppError.ModelUnavailable(
+            "face detection",
+            UnsatisfiedLinkError("x".repeat(2_000)),
+        )
+        assertThat(error.recovery!!.length).isLessThan(400)
+    }
+
+    @Test
+    fun `a multi-line underlying message is reduced to its first line`() {
+        val error = AppError.ModelUnavailable(
+            "face detection",
+            java.io.IOException("first line\nsecond line\nthird line"),
+        )
+        assertThat(error.recovery).contains("first line")
+        assertThat(error.recovery).doesNotContain("second line")
+    }
 }

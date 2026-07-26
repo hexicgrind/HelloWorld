@@ -118,7 +118,7 @@ class TfLiteFaceEmbedder private constructor(
                 }
                 return TfLiteFaceEmbedder(interpreter, size, dims)
             } catch (t: Throwable) {
-                throw AppError.ModelUnavailable(t)
+                throw AppError.ModelUnavailable("face recognition", t)
             }
         }
 

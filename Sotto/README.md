@@ -30,11 +30,11 @@ place in the code.
 
 ## Stack
 
-Exactly as § Technical Stack specifies, with two deviations noted below.
+Exactly as § Technical Stack specifies, with four deviations noted below.
 
 - **Min SDK 30, target SDK 35**, Kotlin 2.0, Jetpack Compose, Material 3
-- **Face detection** — MediaPipe Face Detection 0.10.14 (BlazeFace short-range)
-- **Face embedding** — FaceNet TFLite, 160×160 input → 128-d output
+- **Face detection** — MediaPipe Face Detection 0.10.26.1 (BlazeFace short-range)
+- **Face embedding** — FaceNet TFLite via LiteRT, 160×160 input → 128-d output
 - **Speech-to-Text** — Google Cloud Speech-to-Text
 - **Conversation** — Gemini Live API
 - **Text-to-Speech** — Google Cloud Text-to-Speech
@@ -90,7 +90,7 @@ keeps builds fast and makes every collaborator trivially swappable in tests.
 ## Tests
 
 ```bash
-./gradlew test                      # 380 JVM tests
+./gradlew test                      # 388 JVM tests
 ./gradlew connectedAndroidTest      # instrumented, needs a device
 ./gradlew lintRelease               # zero errors
 ```
@@ -108,6 +108,26 @@ The JVM suite covers what the doc's § Testing Strategy asks for and rather more
 
 The instrumented suite loads the real `.tflite` assets and asserts the model's actual
 output shape, determinism and latency.
+
+## 16 KB page alignment
+
+Android 15 introduced 16 KB memory pages, and they are the default on Android 16 and new
+2025+ hardware. A native library whose ELF LOAD segments are 4 KB aligned cannot be
+`dlopen`ed on such a device at all.
+
+Sotto shipped 1.0.0 with exactly that bug: `mediapipe:tasks-vision:0.10.14` and
+`org.tensorflow:tensorflow-lite:2.16.1` both emit 4 KB-aligned `.so` files, so both
+models failed to load on a 16 KB device while every other part of the app worked. No
+unit test could catch it — Robolectric never loads native code — and lint has no check
+for it.
+
+1.0.1 moves to `tasks-vision:0.10.26.1` and `com.google.ai.edge.litert:litert:1.4.0`,
+both 16 KB aligned, and adds a `verifyNativeLibAlignment` Gradle task that parses the
+ELF program headers of every packaged `.so` and fails `assembleRelease` if any 64-bit
+library is under 16 KB. A dependency bump can no longer reintroduce this silently.
+
+LiteRT is the maintained successor to `tensorflow-lite` and keeps the identical
+`org.tensorflow.lite.Interpreter` API, so the swap needed no code changes.
 
 ## Building
 

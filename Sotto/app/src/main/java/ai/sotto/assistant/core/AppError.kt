@@ -59,11 +59,46 @@ sealed class AppError(
         recovery = "Grant it in Settings › Apps › Sotto › Permissions.",
     )
 
-    class ModelUnavailable(cause: Throwable? = null) : AppError(
-        userMessage = "The on-device face models couldn't be loaded.",
-        recovery = "Reinstall Sotto — a model file may be damaged.",
+    /**
+     * A face model failed to load.
+     *
+     * The cause is surfaced verbatim rather than guessed at. The first version of this
+     * error told the user to reinstall, which was actively misleading when the real
+     * problem was a native library that could not be loaded on their device at all —
+     * reinstalling could never have fixed it. If we don't know why, say so.
+     */
+    class ModelUnavailable(
+        val which: String = "face",
+        cause: Throwable? = null,
+    ) : AppError(
+        userMessage = "Sotto can't load its on-device $which model.",
+        recovery = describeCause(cause),
         cause = cause,
-    )
+    ) {
+        companion object {
+            private fun describeCause(cause: Throwable?): String = when {
+                cause is UnsatisfiedLinkError || cause?.cause is UnsatisfiedLinkError ->
+                    "This build isn't compatible with your phone's processor or page size. " +
+                        "You need a newer build of Sotto — reinstalling this one won't help. " +
+                        "(${short(cause)})"
+                cause is java.io.FileNotFoundException ->
+                    "A model file is missing from the install. Reinstalling Sotto should fix it."
+                cause is java.io.IOException ->
+                    "A model file couldn't be read: ${short(cause)}"
+                cause != null ->
+                    "Details: ${short(cause)}"
+                else ->
+                    "No further detail was available."
+            }
+
+            private fun short(t: Throwable?): String {
+                if (t == null) return "unknown"
+                val message = t.message?.lineSequence()?.firstOrNull()?.trim().orEmpty()
+                val label = t.javaClass.simpleName
+                return if (message.isBlank()) label else "$label: ${message.take(160)}"
+            }
+        }
+    }
 
     class Unknown(cause: Throwable? = null) : AppError(
         userMessage = "Something went wrong.",

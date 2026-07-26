@@ -94,7 +94,7 @@ class MediaPipeFaceDetector private constructor(
             MediaPipeFaceDetector(FaceDetector.createFromOptions(context, options))
                 .also { SLog.i(TAG, "MediaPipe face detector ready (maxFaces=$maxFaces)") }
         } catch (t: Throwable) {
-            throw AppError.ModelUnavailable(t)
+            throw AppError.ModelUnavailable("face detection", t)
         }
     }
 }
