@@ -15,6 +15,7 @@ object Routes {
     const val SETTINGS = "settings"
     const val EARPIECE = "earpiece"
     const val HELP = "help"
+    const val DIAGNOSTICS = "diagnostics"
 
     const val ATTENDEE_DETAIL = "attendee/{attendeeId}"
     fun attendeeDetail(id: String) = "attendee/$id"

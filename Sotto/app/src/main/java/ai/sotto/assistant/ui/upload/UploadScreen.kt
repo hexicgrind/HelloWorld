@@ -1,6 +1,7 @@
 package ai.sotto.assistant.ui.upload
 
 import ai.sotto.assistant.domain.DocumentExtractor
+import ai.sotto.assistant.ui.components.DebouncedTextField
 import ai.sotto.assistant.ui.components.ErrorNotice
 import ai.sotto.assistant.ui.components.Notice
 import ai.sotto.assistant.ui.components.NoticeTone
@@ -137,22 +138,14 @@ fun UploadScreen(
                     title = "2. Or paste text",
                     subtitle = "Names, one per line, or anything copied from a programme.",
                 ) {
-                    OutlinedTextField(
-                        value = state.pastedText,
-                        onValueChange = viewModel::onPastedTextChange,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(150.dp),
-                        placeholder = {
-                            Text(
-                                "Ada Lovelace — Chief Scientist, Analytical Engines\n" +
-                                    "Grace Hopper — VP Engineering, Compilers Inc",
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        },
+                    DebouncedTextField(
+                        external = state.pastedText,
+                        onCommit = viewModel::onPastedTextChange,
+                        placeholder = "Ada Lovelace — Chief Scientist, Analytical Engines\n" +
+                            "Grace Hopper — VP Engineering, Compilers Inc",
+                        singleLine = false,
                         enabled = !state.running,
-                        shape = MaterialTheme.shapes.medium,
-                        textStyle = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.height(150.dp),
                     )
                 }
             }
@@ -162,16 +155,12 @@ fun UploadScreen(
                     title = "3. Options",
                     subtitle = "Sensible defaults — you can leave these alone.",
                 ) {
-                    OutlinedTextField(
-                        value = state.contextHint,
-                        onValueChange = viewModel::onContextHintChange,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("What is this event? (optional)") },
-                        placeholder = { Text("e.g. DevCon 2026, Berlin — infrastructure track") },
+                    DebouncedTextField(
+                        external = state.contextHint,
+                        onCommit = viewModel::onContextHintChange,
+                        label = "What is this event? (optional)",
+                        placeholder = "e.g. DevCon 2026, Berlin — infrastructure track",
                         enabled = !state.running,
-                        singleLine = true,
-                        shape = MaterialTheme.shapes.medium,
-                        textStyle = MaterialTheme.typography.bodyMedium,
                     )
                     Spacer(Modifier.height(12.dp))
                     ToggleRow(

@@ -19,8 +19,8 @@ android {
         // Design Doc 1: "Android SDK: Minimum API level 30. Target API level 35."
         minSdk = 30
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.0.1"
+        versionCode = 3
+        versionName = "1.0.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -61,6 +61,12 @@ android {
             // Shipped as a self-signed sideload build: this is a personal proof of
             // concept, not a Play Store release.
             signingConfig = signingConfigs.getByName("sideload")
+
+            // Shrinking stays on: without it the APK doubles to 99 MB, because
+            // MediaPipe ships an enormous generated-protobuf surface that R8 removes.
+            // Obfuscation is off, though — it buys nothing here and it turns the stack
+            // traces in the in-app diagnostics report into single letters, which is
+            // precisely when they matter most. See -dontobfuscate in proguard-rules.pro.
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

@@ -1,3 +1,9 @@
+# Obfuscation is disabled on purpose. This app ships to a phone the developer cannot
+# attach a debugger to, and its in-app diagnostics report exists to explain failures by
+# their stack traces. Renamed classes would make those reports useless. Shrinking still
+# runs, which is where essentially all of the size saving comes from anyway.
+-dontobfuscate
+
 # --- TensorFlow Lite ---------------------------------------------------------
 -keep class org.tensorflow.lite.** { *; }
 -dontwarn org.tensorflow.lite.**

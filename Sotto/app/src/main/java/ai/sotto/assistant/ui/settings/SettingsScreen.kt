@@ -3,6 +3,7 @@ package ai.sotto.assistant.ui.settings
 import ai.sotto.assistant.data.local.ApiService
 import ai.sotto.assistant.data.local.SottoSettings
 import ai.sotto.assistant.data.remote.TextToSpeechClient
+import ai.sotto.assistant.ui.components.DebouncedTextField
 import ai.sotto.assistant.ui.components.ErrorNotice
 import ai.sotto.assistant.ui.components.Notice
 import ai.sotto.assistant.ui.components.NoticeTone
@@ -202,32 +203,25 @@ fun SettingsScreen(
                     title = "About you",
                     subtitle = "Helps Sotto spot what you have in common with people.",
                 ) {
-                    OutlinedTextField(
-                        value = state.settings.userName,
-                        onValueChange = { v -> viewModel.update { it.copy(userName = v) } },
-                        label = { Text("Your name") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = MaterialTheme.shapes.medium,
+                    DebouncedTextField(
+                        external = state.settings.userName,
+                        onCommit = { v -> viewModel.update { it.copy(userName = v) } },
+                        label = "Your name",
                     )
                     Spacer(Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = state.settings.userRole,
-                        onValueChange = { v -> viewModel.update { it.copy(userRole = v) } },
-                        label = { Text("What you do") },
-                        placeholder = { Text("e.g. Founder of a robotics startup") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = MaterialTheme.shapes.medium,
+                    DebouncedTextField(
+                        external = state.settings.userRole,
+                        onCommit = { v -> viewModel.update { it.copy(userRole = v) } },
+                        label = "What you do",
+                        placeholder = "e.g. Founder of a robotics startup",
                     )
                     Spacer(Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = state.settings.userGoal,
-                        onValueChange = { v -> viewModel.update { it.copy(userGoal = v) } },
-                        label = { Text("What you want out of the event") },
-                        placeholder = { Text("e.g. Find two design partners for our pilot") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = MaterialTheme.shapes.medium,
+                    DebouncedTextField(
+                        external = state.settings.userGoal,
+                        onCommit = { v -> viewModel.update { it.copy(userGoal = v) } },
+                        label = "What you want out of the event",
+                        placeholder = "e.g. Find two design partners for our pilot",
+                        singleLine = false,
                     )
                 }
             }
@@ -268,18 +262,14 @@ fun SettingsScreen(
                         onCheckedChange = { v -> viewModel.update { it.copy(allowWebSearch = v) } },
                     )
                     Spacer(Modifier.height(16.dp))
-                    OutlinedTextField(
-                        value = state.settings.customInstructions,
-                        onValueChange = { v -> viewModel.update { it.copy(customInstructions = v) } },
-                        label = { Text("Extra instructions (optional)") },
-                        placeholder = {
-                            Text("e.g. Never suggest small talk about the weather. Be blunter.")
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(120.dp),
-                        shape = MaterialTheme.shapes.medium,
-                        textStyle = MaterialTheme.typography.bodyMedium,
+                    DebouncedTextField(
+                        external = state.settings.customInstructions,
+                        onCommit = { v -> viewModel.update { it.copy(customInstructions = v) } },
+                        label = "Extra instructions (optional)",
+                        placeholder = "e.g. Never suggest small talk about the weather. Be blunter.",
+                        singleLine = false,
+                        maxLength = 2_000,
+                        modifier = Modifier.height(120.dp),
                     )
                 }
             }
@@ -405,34 +395,25 @@ fun SettingsScreen(
                         onCheckedChange = { v -> viewModel.update { it.copy(useCloudTts = v) } },
                     )
                     Spacer(Modifier.height(16.dp))
-                    OutlinedTextField(
-                        value = state.settings.geminiModel,
-                        onValueChange = { v -> viewModel.update { it.copy(geminiModel = v) } },
-                        label = { Text("Live model") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = MaterialTheme.shapes.medium,
+                    DebouncedTextField(
+                        external = state.settings.geminiModel,
+                        onCommit = { v -> viewModel.update { it.copy(geminiModel = v) } },
+                        label = "Live model",
                         textStyle = MaterialTheme.typography.bodySmall,
                     )
                     Spacer(Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = state.settings.enrichmentModel,
-                        onValueChange = { v -> viewModel.update { it.copy(enrichmentModel = v) } },
-                        label = { Text("Model for preparing data") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = MaterialTheme.shapes.medium,
+                    DebouncedTextField(
+                        external = state.settings.enrichmentModel,
+                        onCommit = { v -> viewModel.update { it.copy(enrichmentModel = v) } },
+                        label = "Model for preparing data",
                         textStyle = MaterialTheme.typography.bodySmall,
                     )
                     Spacer(Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = state.settings.sttLanguage,
-                        onValueChange = { v -> viewModel.update { it.copy(sttLanguage = v) } },
-                        label = { Text("Language code") },
-                        placeholder = { Text("en-US") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = MaterialTheme.shapes.medium,
+                    DebouncedTextField(
+                        external = state.settings.sttLanguage,
+                        onCommit = { v -> viewModel.update { it.copy(sttLanguage = v) } },
+                        label = "Language code",
+                        placeholder = "en-US",
                         textStyle = MaterialTheme.typography.bodySmall,
                     )
                     Spacer(Modifier.height(16.dp))
@@ -506,12 +487,13 @@ private fun ApiKeyField(
             if (stored) StatusPill("Saved", NoticeTone.SUCCESS)
         }
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = value,
-            onValueChange = onValueChange,
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("AIza…") },
-            singleLine = true,
+        DebouncedTextField(
+            external = value,
+            onCommit = onValueChange,
+            placeholder = "AIza…",
+            // An API key is pasted or typed carefully; commit almost immediately so the
+            // Save and Test buttons never act on a stale value.
+            debounceMs = 80L,
             visualTransformation = if (revealed) {
                 VisualTransformation.None
             } else {
@@ -525,7 +507,6 @@ private fun ApiKeyField(
                     )
                 }
             },
-            shape = MaterialTheme.shapes.medium,
             textStyle = MaterialTheme.typography.bodySmall,
         )
     }

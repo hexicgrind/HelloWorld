@@ -30,6 +30,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CloudUpload
 import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.material.icons.rounded.Groups
+import androidx.compose.material.icons.rounded.MonitorHeart
 import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Settings
@@ -75,9 +76,12 @@ fun HomeScreen(
             if (!state.modelsAvailable) {
                 item {
                     Notice(
-                        text = "The on-device face models couldn't be loaded.",
-                        detail = "Reinstalling Sotto should fix this. Everything else still works.",
+                        text = "Sotto can't load its face models on this phone.",
+                        detail = "Everything else still works. Open Diagnostics to see exactly " +
+                            "what failed — it can be copied and sent on in one tap.",
                         tone = NoticeTone.ERROR,
+                        actionLabel = "Open Diagnostics",
+                        onAction = { onNavigate(Routes.DIAGNOSTICS) },
                     )
                 }
             }
@@ -132,6 +136,12 @@ fun HomeScreen(
                         subtitle = "A two-minute read",
                         icon = Icons.AutoMirrored.Rounded.HelpOutline,
                         onClick = { onNavigate(Routes.HELP) },
+                    )
+                    NavRow(
+                        title = "Diagnostics",
+                        subtitle = "Check this install and copy a report",
+                        icon = Icons.Rounded.MonitorHeart,
+                        onClick = { onNavigate(Routes.DIAGNOSTICS) },
                     )
                 }
             }

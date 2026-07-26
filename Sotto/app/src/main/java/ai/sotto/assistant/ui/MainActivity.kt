@@ -2,6 +2,7 @@ package ai.sotto.assistant.ui
 
 import ai.sotto.assistant.SottoApplication
 import ai.sotto.assistant.di.AppContainer
+import ai.sotto.assistant.ui.diagnostics.DiagnosticsScreen
 import ai.sotto.assistant.ui.earpiece.EarpieceScreen
 import ai.sotto.assistant.ui.help.HelpScreen
 import ai.sotto.assistant.ui.home.HomeScreen
@@ -262,6 +263,13 @@ private fun SottoApp(
 
         composable(Routes.HELP) {
             HelpScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable(Routes.DIAGNOSTICS) {
+            DiagnosticsScreen(
+                container = container,
+                onBack = { navController.popBackStack() },
+            )
         }
     }
 }

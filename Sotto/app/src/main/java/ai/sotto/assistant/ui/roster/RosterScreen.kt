@@ -1,6 +1,7 @@
 package ai.sotto.assistant.ui.roster
 
 import ai.sotto.assistant.data.model.Attendee
+import ai.sotto.assistant.ui.components.DebouncedTextField
 import ai.sotto.assistant.ui.components.EmptyState
 import ai.sotto.assistant.ui.components.ErrorNotice
 import ai.sotto.assistant.ui.components.InitialsAvatar
@@ -83,17 +84,13 @@ fun RosterScreen(
                 .padding(padding),
         ) {
             if (!state.database.isEmpty) {
-                OutlinedTextField(
-                    value = state.query,
-                    onValueChange = viewModel::onQueryChange,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp),
-                    placeholder = { Text("Search by name, company or interest") },
+                DebouncedTextField(
+                    external = state.query,
+                    onCommit = viewModel::onQueryChange,
+                    modifier = Modifier.padding(horizontal = 20.dp),
+                    placeholder = "Search by name, company or interest",
                     leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-                    singleLine = true,
-                    shape = MaterialTheme.shapes.medium,
-                    textStyle = MaterialTheme.typography.bodyMedium,
+                    debounceMs = ai.sotto.assistant.ui.components.SEARCH_DEBOUNCE_MS,
                 )
 
                 Spacer(Modifier.height(12.dp))
