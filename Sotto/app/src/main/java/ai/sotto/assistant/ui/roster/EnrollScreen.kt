@@ -23,10 +23,13 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -122,11 +125,31 @@ fun EnrollScreen(
                 },
             )
         },
+        // The buttons live here, not at the end of the scrolling content.
+        //
+        // They used to be the last children of a plain Column. Once someone had captured
+        // a few samples, the thumbnail strip and the status message grew the content past
+        // the height of the screen and pushed "Save face" off the bottom edge, where
+        // nothing could scroll it back into view — so there was visibly no way to finish
+        // enrolling. A bottom bar cannot be pushed anywhere.
+        bottomBar = {
+            EnrolActions(
+                enrol = enrol,
+                onPickPhotos = {
+                    photoPicker.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                },
+                onCapture = { capturePending.set(true) },
+                onSave = viewModel::saveEnrolment,
+            )
+        },
     ) { padding ->
         Column(
             Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp),
         ) {
             Text(
@@ -143,6 +166,9 @@ fun EnrollScreen(
             Box(
                 Modifier
                     .fillMaxWidth()
+                    // Capped so the preview can't crowd everything else off a short
+                    // screen or at a large system font size.
+                    .heightIn(max = 420.dp)
                     .aspectRatio(3f / 4f)
                     .clip(RoundedCornerShape(24.dp))
                     .background(SottoColors.InkElevated),
@@ -191,20 +217,38 @@ fun EnrollScreen(
 
             ErrorNotice(error = enrol.error)
 
-            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+}
 
+/**
+ * The capture and save controls, pinned to the bottom of the screen.
+ *
+ * Everything a user needs to finish enrolling is in here, always visible regardless of
+ * how much has scrolled past above it.
+ */
+@Composable
+internal fun EnrolActions(
+    enrol: RosterViewModel.EnrolState,
+    onPickPhotos: () -> Unit,
+    onCapture: () -> Unit,
+    onSave: () -> Unit,
+) {
+    Surface(color = SottoColors.Ink, tonalElevation = 0.dp) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+        ) {
             Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 10.dp),
+                Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Surface(
-                    onClick = {
-                        photoPicker.launch(
-                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                        )
-                    },
+                    onClick = onPickPhotos,
                     shape = CircleShape,
                     color = SottoColors.InkElevated,
                     modifier = Modifier.size(54.dp),
@@ -212,7 +256,7 @@ fun EnrollScreen(
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             Icons.Rounded.PhotoLibrary,
-                            contentDescription = "Use a photo instead",
+                            contentDescription = "Pick photos instead",
                             tint = SottoColors.Slate,
                             modifier = Modifier.size(21.dp),
                         )
@@ -223,7 +267,7 @@ fun EnrollScreen(
                     PrimaryButton(
                         text = "Capture (${enrol.samples.size}/${RosterViewModel.MIN_SAMPLES})",
                         icon = Icons.Rounded.CenterFocusStrong,
-                        onClick = { capturePending.set(true) },
+                        onClick = onCapture,
                         enabled = !enrol.capturing &&
                             enrol.samples.size < RosterViewModel.MAX_SAMPLES,
                         loading = enrol.capturing,
@@ -231,21 +275,31 @@ fun EnrollScreen(
                 }
             }
 
+            Spacer(Modifier.height(10.dp))
+
             PrimaryButton(
                 text = when {
                     enrol.saved -> "Saved"
                     enrol.samples.isEmpty() -> "Save face"
-                    enrol.isReliable -> "Save face"
+                    enrol.isReliable -> "Save face (${enrol.samples.size})"
                     // Say plainly that saving now is allowed but weaker, rather than
                     // greying the button out and leaving the user stuck.
                     else -> "Save face (${enrol.samples.size} of ${RosterViewModel.MIN_SAMPLES})"
                 },
-                onClick = viewModel::saveEnrolment,
+                onClick = onSave,
                 enabled = enrol.canSave && !enrol.saved,
-                modifier = Modifier
-                    .navigationBarsPadding()
-                    .padding(bottom = 12.dp),
             )
+
+            if (enrol.samples.isEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Capture or pick at least one photo to enable saving.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = SottoColors.Slate,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
     }
 }
