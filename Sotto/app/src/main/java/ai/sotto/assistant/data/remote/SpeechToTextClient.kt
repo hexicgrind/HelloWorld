@@ -117,6 +117,44 @@ class SpeechToTextClient(
         }
     }
 
+    /**
+     * Verifies the key against Cloud Speech-to-Text specifically, by sending a token
+     * amount of silence. Enabling Gemini does not enable this API.
+     */
+    suspend fun validateKey(): Boolean = withContext(io) {
+        val apiKey = keyStore.get(ApiService.SPEECH_TO_TEXT)
+            ?: throw AppError.MissingApiKey(ApiService.SPEECH_TO_TEXT.displayName)
+
+        val payload = buildJsonObject {
+            put("config", buildJsonObject {
+                put("encoding", "LINEAR16")
+                put("sampleRateHertz", AudioFormats.SAMPLE_RATE_HZ)
+                put("languageCode", "en-US")
+            })
+            put("audio", buildJsonObject {
+                // A tenth of a second of silence: enough to be a valid request, small
+                // enough to be free.
+                put("content", Base64.encodeToString(ByteArray(3_200), Base64.NO_WRAP))
+            })
+        }
+
+        val request = Request.Builder()
+            .url("$baseUrl/v1/speech:recognize?key=$apiKey")
+            .post(json.encodeToString(JsonObject.serializer(), payload).toRequestBody(JSON_MEDIA))
+            .build()
+
+        val response = try {
+            client.newCall(request).execute()
+        } catch (t: Throwable) {
+            throw AppError.from(t, SERVICE)
+        }
+        response.use { res ->
+            val body = res.body?.string()
+            if (!res.isSuccessful) throw HttpClients.errorFor(SERVICE, res, body)
+            true
+        }
+    }
+
     internal fun parseResponse(body: String?, languageCode: String): Transcript? {
         if (body.isNullOrBlank()) return null
         return try {

@@ -8,6 +8,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import ai.sotto.assistant.R
+import ai.sotto.assistant.core.SLog
 import java.io.Closeable
 
 /**
@@ -26,13 +27,18 @@ class SoundCues(
 
     enum class Cue { MATCH, WHISPER, READY, STOP, ALERT }
 
+    private companion object { const val TAG = "SoundCues" }
+
     private val appContext = context.applicationContext
 
     private val pool = SoundPool.Builder()
         .setMaxStreams(2)
         .setAudioAttributes(
             AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                // Same route as the spoken whispers (USAGE_ASSISTANT), so cues follow
+                // media volume and reach the earpiece. USAGE_ASSISTANCE_SONIFICATION
+                // lands on the system stream, which is silent on a phone in vibrate.
+                .setUsage(AudioAttributes.USAGE_ASSISTANT)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                 .build()
         )
@@ -46,19 +52,35 @@ class SoundCues(
         appContext.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
     }
 
-    private val soundIds: Map<Cue, Int> = buildMap {
-        runCatching { put(Cue.MATCH, pool.load(appContext, R.raw.sfx_match, 1)) }
-        runCatching { put(Cue.WHISPER, pool.load(appContext, R.raw.sfx_whisper, 1)) }
-        runCatching { put(Cue.READY, pool.load(appContext, R.raw.sfx_ready, 1)) }
-        runCatching { put(Cue.STOP, pool.load(appContext, R.raw.sfx_stop, 1)) }
-        runCatching { put(Cue.ALERT, pool.load(appContext, R.raw.sfx_alert, 1)) }
-    }
-
     private val loaded = mutableSetOf<Int>()
+
+    /**
+     * Sample ids, populated after the load-complete listener is registered.
+     *
+     * Order matters here and used to be wrong: the loads were issued in a property
+     * initialiser that ran *before* the `init` block installed the listener, so any
+     * sample that finished loading in that window was never recorded as ready — and
+     * these files are small enough to win that race almost every time. The cue then
+     * silently refused to play forever, which is exactly what "vibrates but no chime"
+     * looked like on device.
+     */
+    private val soundIds: Map<Cue, Int>
 
     init {
         pool.setOnLoadCompleteListener { _, sampleId, status ->
-            if (status == 0) synchronized(loaded) { loaded.add(sampleId) }
+            if (status == 0) {
+                synchronized(loaded) { loaded.add(sampleId) }
+            } else {
+                SLog.w(TAG, "Sound cue $sampleId failed to load (status $status)")
+            }
+        }
+
+        soundIds = buildMap {
+            runCatching { put(Cue.MATCH, pool.load(appContext, R.raw.sfx_match, 1)) }
+            runCatching { put(Cue.WHISPER, pool.load(appContext, R.raw.sfx_whisper, 1)) }
+            runCatching { put(Cue.READY, pool.load(appContext, R.raw.sfx_ready, 1)) }
+            runCatching { put(Cue.STOP, pool.load(appContext, R.raw.sfx_stop, 1)) }
+            runCatching { put(Cue.ALERT, pool.load(appContext, R.raw.sfx_alert, 1)) }
         }
     }
 
@@ -70,10 +92,11 @@ class SoundCues(
     fun play(cue: Cue) {
         if (!enabledProvider()) return
         val id = soundIds[cue] ?: return
-        val isLoaded = synchronized(loaded) { id in loaded }
-        if (!isLoaded) return
-        val gain = volume * cueGain(cue)
-        runCatching { pool.play(id, gain, gain, 1, 0, 1.0f) }
+        val gain = (volume * cueGain(cue)).coerceIn(0f, 1f)
+        // play() on a not-yet-loaded sample simply returns 0, so there is no reason to
+        // gate on the listener — gating was what silenced the cues in the first place.
+        val stream = runCatching { pool.play(id, gain, gain, 1, 0, 1.0f) }.getOrDefault(0)
+        if (stream == 0) SLog.d(TAG) { "Cue $cue not ready yet" }
     }
 
     fun vibrate(cue: Cue) {

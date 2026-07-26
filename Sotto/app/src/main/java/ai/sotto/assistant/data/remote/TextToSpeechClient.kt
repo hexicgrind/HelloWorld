@@ -134,6 +134,33 @@ class TextToSpeechClient(
 
     fun clearCache() = synchronized(cache) { cache.clear() }
 
+    /**
+     * Verifies the key really works against *this* API.
+     *
+     * Enabling the Generative Language API does not enable Cloud Text-to-Speech — they
+     * are separate services on the project. Testing only Gemini and reporting "your key
+     * works" was actively misleading, because the first thing the user heard afterwards
+     * was this service rejecting them.
+     */
+    suspend fun validateKey(): Boolean = withContext(io) {
+        val apiKey = keyStore.get(ApiService.TEXT_TO_SPEECH)
+            ?: throw AppError.MissingApiKey(ApiService.TEXT_TO_SPEECH.displayName)
+        val request = Request.Builder()
+            .url("$baseUrl/v1/voices?languageCode=en-US&key=$apiKey")
+            .get()
+            .build()
+        val response = try {
+            client.newCall(request).execute()
+        } catch (t: Throwable) {
+            throw AppError.from(t, SERVICE)
+        }
+        response.use { res ->
+            val body = res.body?.string()
+            if (!res.isSuccessful) throw HttpClients.errorFor(SERVICE, res, body)
+            true
+        }
+    }
+
     companion object {
         private const val TAG = "TextToSpeech"
         const val SERVICE = "Text-to-Speech"

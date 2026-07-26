@@ -29,6 +29,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material.icons.rounded.Visibility
@@ -183,7 +185,33 @@ fun SettingsScreen(
                             tone = if (state.keyTest == SettingsViewModel.KeyTestState.VALID) {
                                 NoticeTone.SUCCESS
                             } else {
-                                NoticeTone.ERROR
+                                NoticeTone.WARNING
+                            },
+                        )
+                    }
+
+                    if (state.serviceResults.isNotEmpty()) {
+                        Spacer(Modifier.height(12.dp))
+                        state.serviceResults.forEach { result ->
+                            ServiceResultRow(result)
+                            Spacer(Modifier.height(6.dp))
+                        }
+                        Text(
+                            "Each API is enabled separately on your Google Cloud project. " +
+                                "A key that works for Gemini does not automatically work for " +
+                                "the other two.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        SecondaryButton(
+                            text = "Enable the other APIs",
+                            icon = Icons.Rounded.OpenInNew,
+                            onClick = {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(CLOUD_LIBRARY_URL))
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
                             },
                         )
                     }
@@ -395,19 +423,38 @@ fun SettingsScreen(
                         onCheckedChange = { v -> viewModel.update { it.copy(useCloudTts = v) } },
                     )
                     Spacer(Modifier.height(16.dp))
-                    DebouncedTextField(
-                        external = state.settings.geminiModel,
-                        onCommit = { v -> viewModel.update { it.copy(geminiModel = v) } },
-                        label = "Live model",
-                        textStyle = MaterialTheme.typography.bodySmall,
+                    ModelPicker(
+                        label = "Model for preparing data",
+                        selected = state.settings.enrichmentModel,
+                        options = state.models.filter { it.supportsGenerateContent },
+                        loading = state.loadingModels,
+                        onSelected = { v -> viewModel.update { it.copy(enrichmentModel = v) } },
                     )
                     Spacer(Modifier.height(12.dp))
-                    DebouncedTextField(
-                        external = state.settings.enrichmentModel,
-                        onCommit = { v -> viewModel.update { it.copy(enrichmentModel = v) } },
-                        label = "Model for preparing data",
-                        textStyle = MaterialTheme.typography.bodySmall,
+                    ModelPicker(
+                        label = "Live model",
+                        selected = state.settings.geminiModel,
+                        options = state.models.filter { it.supportsLive },
+                        loading = state.loadingModels,
+                        onSelected = { v ->
+                            viewModel.update { it.copy(geminiModel = "models/${v.removePrefix("models/")}") }
+                        },
                     )
+                    Spacer(Modifier.height(10.dp))
+                    SecondaryButton(
+                        text = if (state.models.isEmpty()) {
+                            "Fetch available models"
+                        } else {
+                            "Refresh model list (${state.models.size})"
+                        },
+                        icon = Icons.Rounded.Refresh,
+                        onClick = viewModel::refreshModels,
+                        loading = state.loadingModels,
+                    )
+                    state.modelNotice?.let { notice ->
+                        Spacer(Modifier.height(10.dp))
+                        Notice(text = notice, tone = NoticeTone.INFO)
+                    }
                     Spacer(Modifier.height(12.dp))
                     DebouncedTextField(
                         external = state.settings.sttLanguage,
@@ -573,4 +620,106 @@ private fun SliderRow(
     }
 }
 
+@Composable
+private fun ServiceResultRow(result: SettingsViewModel.ServiceResult) {
+    val accent = if (result.ok) {
+        MaterialTheme.colorScheme.secondary
+    } else {
+        MaterialTheme.colorScheme.error
+    }
+    Row(verticalAlignment = Alignment.Top) {
+        Icon(
+            if (result.ok) Icons.Rounded.Check else Icons.Rounded.Close,
+            contentDescription = null,
+            tint = accent,
+            modifier = Modifier.size(17.dp),
+        )
+        Spacer(Modifier.width(10.dp))
+        Column {
+            Text(result.service.displayName, style = MaterialTheme.typography.titleSmall)
+            Text(
+                result.detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * A dropdown of the models this key can actually use.
+ *
+ * Free text was a trap: Google retires model names, and a typed-in dead name fails with
+ * an error the user can't act on. The list comes from the API, so it is always true.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ModelPicker(
+    label: String,
+    selected: String,
+    options: List<ai.sotto.assistant.data.remote.GeminiRestClient.ModelInfo>,
+    loading: Boolean,
+    onSelected: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val bare = selected.removePrefix("models/")
+    val known = options.firstOrNull { it.id == bare }
+
+    ExposedDropdownMenuBox(
+        expanded = expanded && options.isNotEmpty(),
+        onExpandedChange = { if (options.isNotEmpty()) expanded = it },
+    ) {
+        OutlinedTextField(
+            value = bare,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(label) },
+            supportingText = {
+                Text(
+                    when {
+                        loading -> "Checking which models your key can use…"
+                        options.isEmpty() -> "Tap \"Fetch available models\" to see your options."
+                        known == null -> "Not in your key's list — it may have been retired."
+                        known.isPreview -> "Preview model — usually needs billing enabled."
+                        else -> "Available on your key."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            },
+            isError = options.isNotEmpty() && known == null,
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(androidx.compose.material3.MenuAnchorType.PrimaryNotEditable),
+            shape = MaterialTheme.shapes.medium,
+            textStyle = MaterialTheme.typography.bodySmall,
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { model ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(model.id, style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                if (model.isPreview) {
+                                    "${model.displayName} · preview"
+                                } else {
+                                    model.displayName
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
+                    onClick = {
+                        onSelected(model.id)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
 private const val AI_STUDIO_URL = "https://aistudio.google.com/app/apikey"
+private const val CLOUD_LIBRARY_URL = "https://console.cloud.google.com/apis/library"

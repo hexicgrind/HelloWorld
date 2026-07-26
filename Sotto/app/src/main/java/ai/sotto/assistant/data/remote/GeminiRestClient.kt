@@ -151,6 +151,80 @@ class GeminiRestClient(
         }
     }
 
+    /** One model as the API reports it. */
+    data class ModelInfo(
+        val id: String,
+        val displayName: String,
+        val description: String,
+        val methods: List<String>,
+    ) {
+        /** Usable for the offline enrichment pass. */
+        val supportsGenerateContent: Boolean get() = "generateContent" in methods
+
+        /** Usable for the Gemini Live session. */
+        val supportsLive: Boolean get() = "bidiGenerateContent" in methods
+
+        /** Preview models generally require billing and carry tighter rate limits. */
+        val isPreview: Boolean
+            get() = id.contains("preview", ignoreCase = true) ||
+                id.contains("-exp", ignoreCase = true)
+    }
+
+    /**
+     * Asks the API which models this key can actually use.
+     *
+     * Hardcoding model names is a slow-motion bug: Google retires them, and an app
+     * pinned to a dead name simply stops working with an error the user can do nothing
+     * about. `gemini-2.0-flash` shut down under this app exactly that way. Fetching the
+     * live list means the app adapts on its own.
+     */
+    suspend fun listModels(): List<ModelInfo> = withContext(io) {
+        val apiKey = keyStore.get(ApiService.GEMINI)
+            ?: throw AppError.MissingApiKey(ApiService.GEMINI.displayName)
+
+        val collected = mutableListOf<ModelInfo>()
+        var pageToken: String? = null
+        var pages = 0
+
+        do {
+            val url = buildString {
+                append("$baseUrl/v1beta/models?key=$apiKey&pageSize=200")
+                pageToken?.let { append("&pageToken=$it") }
+            }
+            val response = try {
+                client.newCall(Request.Builder().url(url).get().build()).execute()
+            } catch (t: Throwable) {
+                throw AppError.from(t, SERVICE)
+            }
+
+            pageToken = response.use { res ->
+                val body = res.body?.string()
+                if (!res.isSuccessful) throw HttpClients.errorFor(SERVICE, res, body)
+                val root = runCatching { json.parseToJsonElement(body.orEmpty()).jsonObject }
+                    .getOrElse { throw AppError.BadResponse(SERVICE, it) }
+
+                (root["models"] as? JsonArray)?.forEach { element ->
+                    val obj = element as? JsonObject ?: return@forEach
+                    val name = obj["name"]?.jsonPrimitive?.contentOrNull ?: return@forEach
+                    collected += ModelInfo(
+                        id = name.removePrefix("models/"),
+                        displayName = obj["displayName"]?.jsonPrimitive?.contentOrNull
+                            ?: name.removePrefix("models/"),
+                        description = obj["description"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                        methods = (obj["supportedGenerationMethods"] as? JsonArray)
+                            ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                            ?: emptyList(),
+                    )
+                }
+                root["nextPageToken"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            }
+            pages++
+        } while (pageToken != null && pages < MAX_MODEL_PAGES)
+
+        SLog.i(TAG, "Key can use ${collected.size} models")
+        collected
+    }
+
     /** Cheap credential check for the Settings screen's "Test key" button. */
     suspend fun validateKey(model: String): Boolean = withContext(io) {
         val apiKey = keyStore.get(ApiService.GEMINI)
@@ -359,6 +433,7 @@ class GeminiRestClient(
         const val DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com"
         const val MAX_TEXT_CHARS = 400_000
         const val MAX_ENRICHMENT_TOKENS = 32_768
+        const val MAX_MODEL_PAGES = 10
 
         private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
         private val FENCE_REGEX = Regex("```(?:json)?\\s*([\\s\\S]*?)```", RegexOption.IGNORE_CASE)

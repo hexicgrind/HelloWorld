@@ -4,7 +4,9 @@ import ai.sotto.assistant.core.AppError
 import ai.sotto.assistant.data.local.ApiService
 import ai.sotto.assistant.data.local.SecureKeyStore
 import ai.sotto.assistant.data.local.SottoSettings
+import ai.sotto.assistant.data.remote.GeminiRestClient
 import ai.sotto.assistant.di.AppContainer
+import ai.sotto.assistant.domain.ModelResolver
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,6 +20,9 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
 
     enum class KeyTestState { IDLE, TESTING, VALID, INVALID }
 
+    /** Per-service outcome, because one key does not mean three working APIs. */
+    data class ServiceResult(val service: ApiService, val ok: Boolean, val detail: String)
+
     data class UiState(
         val settings: SottoSettings = SottoSettings(),
         val keyState: SecureKeyStore.KeyState = SecureKeyStore.KeyState(true, emptyMap()),
@@ -25,6 +30,10 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         val revealed: Set<ApiService> = emptySet(),
         val keyTest: KeyTestState = KeyTestState.IDLE,
         val keyTestMessage: String? = null,
+        val serviceResults: List<ServiceResult> = emptyList(),
+        val models: List<GeminiRestClient.ModelInfo> = emptyList(),
+        val loadingModels: Boolean = false,
+        val modelNotice: String? = null,
         val error: AppError? = null,
         val savedNotice: String? = null,
     )
@@ -39,6 +48,10 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         container.keyStore.state
             .onEach { keys -> _state.value = _state.value.copy(keyState = keys) }
             .launchIn(viewModelScope)
+
+        // Fetch the model list on open when a key is present, so a retired model is
+        // repaired before the user next tries to prepare data.
+        if (container.keyStore.has(ApiService.GEMINI)) refreshModels()
 
         // Pre-fill the fields with whatever is already stored.
         _state.value = _state.value.copy(
@@ -93,30 +106,105 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         )
     }
 
-    /** Round-trips the Gemini key against a cheap endpoint so the user knows it works. */
+    /**
+     * Tests all three APIs, not just Gemini.
+     *
+     * Enabling the Generative Language API does not enable Cloud Speech-to-Text or
+     * Cloud Text-to-Speech — they are separate services on the project. Reporting "your
+     * key works" after checking only Gemini sent the user away confident and then
+     * failed them at the first whisper.
+     */
     fun testGeminiKey() {
-        val draft = _state.value.keyDrafts[ApiService.GEMINI].orEmpty()
-        if (draft.isNotBlank()) container.keyStore.put(ApiService.GEMINI, draft)
+        _state.value.keyDrafts.forEach { (service, value) ->
+            if (value.isNotBlank()) container.keyStore.put(service, value)
+        }
 
-        _state.value = _state.value.copy(keyTest = KeyTestState.TESTING, keyTestMessage = null)
+        _state.value = _state.value.copy(
+            keyTest = KeyTestState.TESTING,
+            keyTestMessage = null,
+            serviceResults = emptyList(),
+        )
+
+        viewModelScope.launch {
+            val results = mutableListOf<ServiceResult>()
+
+            results += probe(ApiService.GEMINI) {
+                container.geminiRest.validateKey(_state.value.settings.enrichmentModel)
+            }
+            results += probe(ApiService.SPEECH_TO_TEXT) { container.speechToText.validateKey() }
+            results += probe(ApiService.TEXT_TO_SPEECH) { container.textToSpeech.validateKey() }
+
+            val allOk = results.all { it.ok }
+            _state.value = _state.value.copy(
+                keyTest = if (allOk) KeyTestState.VALID else KeyTestState.INVALID,
+                serviceResults = results,
+                keyTestMessage = when {
+                    allOk -> "All three services work."
+                    results.first { it.service == ApiService.GEMINI }.ok ->
+                        "Gemini works. The services below still need enabling — the app " +
+                            "will run without them, it just won't speak or transcribe."
+                    else -> "Gemini isn't working, so nothing else will either."
+                },
+            )
+
+            if (results.first { it.service == ApiService.GEMINI }.ok) refreshModels()
+        }
+    }
+
+    private suspend fun probe(service: ApiService, block: suspend () -> Boolean): ServiceResult =
+        try {
+            block()
+            ServiceResult(service, true, "Working")
+        } catch (e: AppError) {
+            ServiceResult(service, false, "${e.userMessage} ${e.recovery.orEmpty()}".trim())
+        } catch (t: Throwable) {
+            ServiceResult(service, false, AppError.from(t, service.displayName).userMessage)
+        }
+
+    /**
+     * Asks the API which models this key can use, and silently repairs the configured
+     * model if it has been retired.
+     */
+    fun refreshModels() {
+        _state.value = _state.value.copy(loadingModels = true, modelNotice = null)
         viewModelScope.launch {
             try {
-                container.geminiRest.validateKey(_state.value.settings.enrichmentModel)
-                _state.value = _state.value.copy(
-                    keyTest = KeyTestState.VALID,
-                    keyTestMessage = "Your key works.",
-                )
+                val models = container.geminiRest.listModels()
+                _state.value = _state.value.copy(models = models, loadingModels = false)
+                healRetiredModels(models)
             } catch (e: AppError) {
                 _state.value = _state.value.copy(
-                    keyTest = KeyTestState.INVALID,
-                    keyTestMessage = "${e.userMessage} ${e.recovery.orEmpty()}".trim(),
+                    loadingModels = false,
+                    modelNotice = "Couldn't fetch the model list: ${e.userMessage}",
                 )
             } catch (t: Throwable) {
                 _state.value = _state.value.copy(
-                    keyTest = KeyTestState.INVALID,
-                    keyTestMessage = AppError.from(t).userMessage,
+                    loadingModels = false,
+                    modelNotice = AppError.from(t).userMessage,
                 )
             }
+        }
+    }
+
+    private suspend fun healRetiredModels(models: List<GeminiRestClient.ModelInfo>) {
+        val settings = _state.value.settings
+        val enrichment = ModelResolver.resolve(
+            settings.enrichmentModel, models, ModelResolver.Purpose.ENRICHMENT,
+        )
+        val live = ModelResolver.resolve(
+            settings.geminiModel, models, ModelResolver.Purpose.LIVE,
+        )
+
+        if (enrichment.substituted || live.substituted) {
+            container.settingsRepository.update {
+                it.copy(enrichmentModel = enrichment.model, geminiModel = live.model)
+            }
+            _state.value = _state.value.copy(
+                modelNotice = listOfNotNull(
+                    enrichment.reason.takeIf { enrichment.substituted },
+                    live.reason.takeIf { live.substituted },
+                ).joinToString(" "),
+            )
         }
     }
 
@@ -173,6 +261,10 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun dismissNotice() {
-        _state.value = _state.value.copy(savedNotice = null, keyTestMessage = null)
+        _state.value = _state.value.copy(
+            savedNotice = null,
+            keyTestMessage = null,
+            modelNotice = null,
+        )
     }
 }

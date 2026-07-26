@@ -61,8 +61,29 @@ data class SottoSettings(
         const val DEFAULT_SPEAKING_RATE = 1.08f
         const val DEFAULT_TTS_VOICE = "en-US-Neural2-C"
         const val DEFAULT_LANGUAGE = "en-US"
-        const val DEFAULT_LIVE_MODEL = "models/gemini-2.0-flash-live-001"
-        const val DEFAULT_ENRICHMENT_MODEL = "gemini-2.0-flash"
+        /**
+         * Starting points only — the app asks the API which models the key can actually
+         * use and heals these if they have been retired. `gemini-2.0-flash` was the
+         * original default and Google shut it down, which is exactly why nothing here
+         * is treated as permanent.
+         */
+        const val DEFAULT_LIVE_MODEL = "models/gemini-3.1-flash-live-preview"
+        const val DEFAULT_ENRICHMENT_MODEL = "gemini-3.6-flash"
+
+        /** Tried in order when the configured enrichment model is unavailable. */
+        val ENRICHMENT_FALLBACKS = listOf(
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-2.5-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-2.5-flash-lite",
+        )
+
+        /** Tried in order when the configured live model is unavailable. */
+        val LIVE_FALLBACKS = listOf(
+            "gemini-3.1-flash-live-preview",
+            "gemini-2.5-flash-native-audio-preview-12-2025",
+        )
 
         val MATCH_THRESHOLD_RANGE = 0.40f..0.95f
         val SUGGESTION_INTERVAL_RANGE = 5..10
